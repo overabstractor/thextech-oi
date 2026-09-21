@@ -283,6 +283,15 @@ int spawnNPC(NPCID type, int count)
         n.Location.SpeedX = 0.0;
         n.Location.SpeedY = 0.0;
         n.Direction = (side > 0) ? -1 : 1;
+        // Su origen es donde aparece: varias IA del motor lo usan (las plantas se destruyen si no están en su
+        // X de origen, los peces y fantasmas se mueven alrededor de él).
+        n.DefaultLocationX = n.Location.X;
+        n.DefaultLocationY = n.Location.Y;
+        n.DefaultDirection = n.Direction;
+        // Un pez fuera del agua atravesaría el suelo: en tierra salta desde abajo hasta la altura de Mario
+        // (el modo de pez saltarín del motor, como los Cheep Cheep de los puentes).
+        if(n->IsFish && p.Wet == 0)
+            n.Special = 2;
         n.Section = (uint8_t)p.Section;
         n.Layer = LAYER_SPAWNED_NPCS;
         n.Active = true;
