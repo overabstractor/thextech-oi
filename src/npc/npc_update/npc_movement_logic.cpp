@@ -26,6 +26,8 @@
 #include "collision.h"
 
 #include "main/trees.h"
+#include "oi/oi_smb1.h"
+#include "oi/oi_bridge.h"
 
 static inline bool s_use_default_movement(int A)
 {
@@ -754,6 +756,10 @@ void NPCMovementLogic(int A, float& speedVar)
         }
     }
 
+    // OverInteractive: los enemigos de SMB1 con las cifras del juego original
+    if(g_oiCliEpisode)
+        OI_Smb1Enemy(A);
+
     // Actual Movement (SpeedX / SpeedY application code)
     if((!NPCIsAnExit(NPC[A]) || NPC[A].Type == NPCID_STAR_EXIT || NPC[A].Type == NPCID_STAR_COLLECT) &&
         NPC[A].Type != NPCID_FIRE_POWER_S3 && NPC[A].Type != NPCID_CONVEYOR)
@@ -804,6 +810,10 @@ void NPCMovementLogic(int A, float& speedVar)
 
     // Special NPCs code
     SpecialNPC(A);
+
+    // OverInteractive: los Paratroopas de SMB1 con el movimiento del juego original
+    if(g_oiCliEpisode)
+        OI_Smb1Troopa(A);
 
     // only the top half of the saw collides with blocks (gets restored after block collisions)
     if(NPC[A].Type == NPCID_SAW)

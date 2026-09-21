@@ -52,6 +52,7 @@
 
 #include "globals.h"
 #include "game_main.h"
+#include "oi/oi_bridge.h"
 #include "gfx.h"
 
 #include "config.h"
@@ -703,6 +704,7 @@ int GameMain(const CmdLineSetup_t &setup)
                 }
 
                 QuickReconnectScreen::g_active = true;
+                g_oiCliEpisode = true;
 
                 StartEpisode();
             }

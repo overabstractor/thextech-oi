@@ -34,6 +34,8 @@
 #include "core/16m/sound_stream_16m.h"
 #endif
 
+#include "../oi/oi_bridge.h"
+#include "../oi/oi_smb1.h"
 #include "../globals.h"
 #include "../config.h"
 #include "../frame_timer.h"
@@ -152,15 +154,19 @@ void GameLoop()
     g_microStats.start_task(MicroStats::Script);
     lunaLoop();
 
+    OI_Poll();
+
     g_microStats.start_task(MicroStats::Controls);
 
     if(!Controls::Update())
     {
         QuickReconnectScreen::g_active = true;
 
-        if(g_config.allow_drop_add && !TestLevel)
+        if(g_config.allow_drop_add && !TestLevel && !g_oiCliEpisode)
             PauseGame(PauseCode::DropAdd, 0);
     }
+
+    OI_AfterControls();
 
     if(QuickReconnectScreen::g_active)
         QuickReconnectScreen::Logic();
@@ -281,6 +287,7 @@ void GameLoop()
         UpdateEffects();
         g_microStats.start_task(MicroStats::Player);
         UpdatePlayer();
+        OI_Smb1Frame(); // OverInteractive: bandera, puente de Bowser, oleadas
         speedRun_tick();
         // UpdateGraphics() now calls start_task internally
         if(LivingPlayers() || BattleMode)

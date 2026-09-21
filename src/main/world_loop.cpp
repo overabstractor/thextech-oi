@@ -25,6 +25,7 @@
 #include <sdl_proxy/sdl_stdinc.h>
 
 #include "../globals.h"
+#include "../oi/oi_bridge.h"
 #include "../frame_timer.h"
 #include "../game_main.h"
 #include "../sound.h"
@@ -265,7 +266,7 @@ void WorldLoop()
     {
         QuickReconnectScreen::g_active = true;
 
-        if(g_config.allow_drop_add)
+        if(g_config.allow_drop_add && !g_oiCliEpisode)
             PauseGame(PauseCode::DropAdd, 0);
     }
 

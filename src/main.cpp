@@ -20,6 +20,7 @@
 
 #include <ctime>
 #include "sdl_proxy/sdl_head.h"
+#include "oi/oi_bridge.h"
 
 #include "../version.h"
 
@@ -808,7 +809,11 @@ int main(int argc, char**argv)
     Controls::Init();
     Controls::LoadConfig();
 
+    OI_Init();
+
     int ret = GameMain(setup);
+
+    OI_Shutdown();
 
 #ifdef ENABLE_XTECH_LUA
     if(!xtech_lua_quit())

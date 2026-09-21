@@ -20,6 +20,7 @@
 
 #include "../globals.h"
 #include "../npc.h"
+#include "../oi/oi_smb1.h"
 #include "../npc_id.h"
 #include "../eff_id.h"
 #include "../sound.h"
@@ -699,6 +700,10 @@ void KillNPC(int A, int B)
                 NewEffect(EFFID_SMOKE_S3, NPC[A].Location);
                 if(!NPC[A].NoLavaSplash)
                     NewEffect(EFFID_LAVA_SPLASH, NPC[A].Location);
+            }
+            // OverInteractive: en 1-4..7-4 el Bowser de SMB1 era un impostor y cae con su forma real.
+            else if(NPC[A].DefaultSpecial > 0 && OI_Smb1BowserDeath(A))
+            {
             }
             else
             {
