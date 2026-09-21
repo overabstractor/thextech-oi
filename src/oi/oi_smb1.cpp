@@ -1498,6 +1498,17 @@ void OI_Smb1Troopa(int A)
         troopaFlyVertical(n, st);
 }
 
+void OI_Smb1EnemyFacing(int A)
+{
+    NPC_t& n = NPC[A];
+    if(!isWalkerS1(n.Type) || n.Projectile || n.HoldingPlayer > 0 || n.Effect != NPCEFF_NORMAL)
+        return;
+    if(n.Location.SpeedX > 0.0)
+        n.Direction = 1;
+    else if(n.Location.SpeedX < 0.0)
+        n.Direction = -1;
+}
+
 void OI_Smb1Enemy(int A)
 {
     NPC_t& n = NPC[A];

@@ -64,6 +64,10 @@ double OI_Smb1VineGrowSpeed();
 //! caida, giro hacia Mario al aterrizar, patada y caparazon que revive. Desde NPCMovementLogic, antes de mover.
 void OI_Smb1Enemy(int A);
 
+//! Al empezar el movimiento: la dirección de los enemigos de SMB1 sale del signo de su velocidad (así se
+//! respetan todos los giros del motor, que invierten la velocidad).
+void OI_Smb1EnemyFacing(int A);
+
 //! Paratroopas de SMB1 de los niveles (Special 1 salta, 2 vuela en horizontal, 3 en vertical) con el movimiento
 //! del juego. Desde NPCMovementLogic, justo despues de SpecialNPC (que es quien los mueve en el motor).
 void OI_Smb1Troopa(int A);

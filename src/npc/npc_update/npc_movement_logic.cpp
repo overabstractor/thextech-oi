@@ -36,6 +36,12 @@ static inline bool s_use_default_movement(int A)
 
 void NPCMovementLogic(int A, float& speedVar)
 {
+    // OverInteractive: los enemigos de SMB1 andan más despacio que el umbral del motor (1,0 < 1,2); sin esto,
+    // al darse la vuelta (velocidad invertida por una pared, un borde u otro enemigo) el motor les devolvería
+    // la dirección vieja y se quedarían empujando la pared.
+    if(g_oiSmb1)
+        OI_Smb1EnemyFacing(A);
+
     // POSSIBLE SUBROUTINE: setSpeed
 
     // Default Movement Code
