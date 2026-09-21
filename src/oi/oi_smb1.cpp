@@ -21,6 +21,8 @@
 #include "../npc_traits.h"
 #include "../rand.h"
 #include "../sound.h"
+#include "../game_main.h"
+#include "../script/msg_preprocessor.h"
 
 using namespace OiSmb1;
 
@@ -98,10 +100,14 @@ enum class Seq
     VineGrow,       // llegada: agarrado abajo mientras la liana brota (VineHeight hasta $60)
     VineClimb,      // y sube por ella hasta y = $98
     VineStep,       // y se baja a la derecha hasta x = $48
+    RescueTalk,     // tras el hacha: Mario se para ante Toad (o Peach) y sale su mensaje
 };
 
 Seq                 s_seq = Seq::None;
 int                 s_timer = 0;
+bool                s_rescueDone = false;       // el mensaje de Toad/Peach ya salió en este nivel
+int                 s_rescueMsgFrames = -1;     // frames que lleva abierto ese mensaje (-1: no está)
+int                 s_rescueNpc = 0;
 std::string         s_file;
 int                 s_section = -1;
 
@@ -133,6 +139,8 @@ void resetLevelState()
 {
     s_resetLakitu = true;
     s_clearEnemyStates = true;
+    s_rescueDone = false;
+    s_rescueNpc = 0;
     s_vineDone = false;
     s_seq = Seq::None;
     s_timer = 0;
@@ -2333,6 +2341,14 @@ void lakituFrame(const Player_t& p)
 }
 } // namespace
 
+bool OI_Smb1MessageTimeout()
+{
+    // Como en el juego, el mensaje de Toad/Peach no espera a que se pulse nada: se cierra a los 4 s.
+    if(s_rescueMsgFrames < 0)
+        return false;
+    return ++s_rescueMsgFrames > 4 * 65;
+}
+
 void OI_Smb1Frame()
 {
     if(GameMenu || LevelSelect || GameOutro || LevelEditor || numPlayers < 1)
@@ -2397,8 +2413,50 @@ void OI_Smb1Frame()
         vineStep(p);
         break;
 
-    case Seq::FlagWalk:
     case Seq::BridgeWalk:
+        // Al llegar a Toad (o a Peach en el 8-4) Mario se para y sale su mensaje, como en el juego (allí
+        // aparece solo, sin pulsar nada); luego sigue hasta el portal del siguiente mundo.
+        if(!s_rescueDone)
+        {
+            for(int i = 1; i <= numNPCs; i++)
+            {
+                const NPC_t& t = NPC[i];
+                if((t.Type == NPCID_CIVILIAN || t.Type == NPCID_CHAR3) && t.Inert && t.Section == p.Section &&
+                   t.Text != STRINGINDEX_NONE && p.Location.X + p.Location.Width >= t.Location.X - 24.0)
+                {
+                    s_rescueNpc = i;
+                    s_seq = Seq::RescueTalk;
+                    s_timer = 0;
+                    p.Location.SpeedX = 0.0;
+                    break;
+                }
+            }
+        }
+        // El portal del final carga el siguiente nivel; esto solo es una red por si no llega.
+        if(s_seq == Seq::BridgeWalk && ++s_timer > 60 * 20)
+            s_seq = Seq::None;
+        break;
+
+    case Seq::RescueTalk:
+        p.Location.SpeedX = 0.0;
+        if(++s_timer == 20)
+        {
+            s_rescueDone = true;
+            if(s_rescueNpc >= 1 && s_rescueNpc <= numNPCs && NPC[s_rescueNpc].Text != STRINGINDEX_NONE)
+            {
+                MessageText = GetS(NPC[s_rescueNpc].Text);
+                preProcessMessage(MessageText, 1);
+                s_rescueMsgFrames = 0;
+                PauseGame(PauseCode::Message, 1);
+                s_rescueMsgFrames = -1;
+                MessageText.clear();
+            }
+            s_seq = Seq::BridgeWalk;
+            s_timer = 0;
+        }
+        break;
+
+    case Seq::FlagWalk:
         // El portal del final carga el siguiente nivel; esto solo es una red por si no llega.
         if(++s_timer > 60 * 20)
             s_seq = Seq::None;

@@ -610,6 +610,9 @@ int PauseGame(PauseCode code, int plr)
             {
                 if(MessageScreen_Logic(plr))
                     break;
+                // OverInteractive: el mensaje del final del castillo de SMB1 se cierra solo
+                if(g_oiSmb1 && OI_Smb1MessageTimeout())
+                    break;
             }
             else if(GamePaused == PauseCode::Prompt)
             {

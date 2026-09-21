@@ -86,6 +86,9 @@ void OI_Smb1Bowser(int A);
 //! motor no pone su propio efecto de muerte.
 bool OI_Smb1BowserDeath(int A);
 
+//! Mensaje de Toad/Peach abierto (desde el bucle de pausa): true cuando toca cerrarlo solo.
+bool OI_Smb1MessageTimeout();
+
 //! Antes de la fisica: fuerza los controles durante las secuencias (bandera, puente).
 void OI_Smb1Controls();
 
