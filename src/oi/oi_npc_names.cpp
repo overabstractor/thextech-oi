@@ -6,6 +6,8 @@
 
 #include <cstring>
 
+#include "oi_crossover.h"
+
 namespace
 {
 struct Entry { const char* name; NPCID id; };
@@ -317,7 +319,8 @@ NPCID OI_NpcByName(const char* name)
             return e.id;
     }
 
-    return NPCID_NULL;
+    // Personajes invitados (NPC 293-298, oi_crossover): no están en npc_id.h.
+    return OI_CrossoverByName(name);
 }
 
 int OI_NpcCount()

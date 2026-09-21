@@ -70,6 +70,7 @@
 #include "game_strings.h"
 
 #include "../pseudo_vb.h"
+#include "../oi/oi_crossover.h"
 
 PauseCode GamePaused = PauseCode::None;
 
@@ -289,6 +290,7 @@ void GameLoop()
         UpdatePlayer();
         if(g_oiSmb1)
             OI_Smb1Frame(); // OverInteractive: bandera, puente de Bowser, oleadas
+        OI_CrossoverFrames(); // OverInteractive: fotogramas de los personajes invitados
         speedRun_tick();
         // UpdateGraphics() now calls start_task internally
         if(LivingPlayers() || BattleMode)

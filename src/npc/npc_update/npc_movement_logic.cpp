@@ -28,6 +28,7 @@
 #include "main/trees.h"
 #include "oi/oi_smb1.h"
 #include "oi/oi_bridge.h"
+#include "oi/oi_crossover.h"
 
 static inline bool s_use_default_movement(int A)
 {
@@ -765,6 +766,8 @@ void NPCMovementLogic(int A, float& speedVar)
     // OverInteractive: los enemigos de SMB1 con las cifras del juego original
     if(g_oiSmb1)
         OI_Smb1Enemy(A);
+    // OverInteractive: personajes invitados (Goku, Sonic, Naruto), en cualquier mundo
+    OI_CrossoverNpc(A);
 
     // Actual Movement (SpeedX / SpeedY application code)
     if((!NPCIsAnExit(NPC[A]) || NPC[A].Type == NPCID_STAR_EXIT || NPC[A].Type == NPCID_STAR_COLLECT) &&

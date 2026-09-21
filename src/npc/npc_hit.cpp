@@ -40,9 +40,13 @@
 #include "main/trees.h"
 
 #include <Logger/logger.h>
+#include "../oi/oi_crossover.h"
 
 void NPCHit(int A, int B, int C)
 {
+    // OverInteractive: los personajes invitados llevan su vida y sus reglas de daño
+    if(OI_CrossoverHit(A, B, C))
+        return;
 
     NPC_t tempNPC;
     Location_t tempLocation;
