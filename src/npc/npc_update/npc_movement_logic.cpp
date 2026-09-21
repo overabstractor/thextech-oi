@@ -757,7 +757,7 @@ void NPCMovementLogic(int A, float& speedVar)
     }
 
     // OverInteractive: los enemigos de SMB1 con las cifras del juego original
-    if(g_oiCliEpisode)
+    if(g_oiSmb1)
         OI_Smb1Enemy(A);
 
     // Actual Movement (SpeedX / SpeedY application code)
@@ -812,7 +812,7 @@ void NPCMovementLogic(int A, float& speedVar)
     SpecialNPC(A);
 
     // OverInteractive: los Paratroopas de SMB1 con el movimiento del juego original
-    if(g_oiCliEpisode)
+    if(g_oiSmb1)
         OI_Smb1Troopa(A);
 
     // only the top half of the saw collides with blocks (gets restored after block collisions)

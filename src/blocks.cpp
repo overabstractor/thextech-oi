@@ -615,7 +615,7 @@ void BlockHit(int A, bool HitDown, int whatPlayer)
 
             // OverInteractive: en Super Mario Bros lo que sale de un bloque siempre arranca hacia la
             // derecha (el motor lo manda al lado contrario al que mira el jugador).
-            if(g_oiCliEpisode)
+            if(g_oiSmb1)
                 nn.Direction = 1;
 
             if(NPCIsYoshi(C)) // if the npc is pet then set the color of the pod

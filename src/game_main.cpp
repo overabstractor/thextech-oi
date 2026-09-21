@@ -705,6 +705,7 @@ int GameMain(const CmdLineSetup_t &setup)
 
                 QuickReconnectScreen::g_active = true;
                 g_oiCliEpisode = true;
+                g_oiSmb1 = Files::fileExists(SelectWorld[selWorld].WorldPath + "oi-smb1.txt");
 
                 StartEpisode();
             }

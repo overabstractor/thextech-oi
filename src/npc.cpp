@@ -707,7 +707,7 @@ void NPCSpecial(int A)
     {
         npc.Location.SpeedY = -2;
         // OverInteractive: en SMB1 la liana crece a medio pixel NES por frame y para al salir por arriba.
-        if(g_oiCliEpisode)
+        if(g_oiSmb1)
             npc.Location.SpeedY = (npc.Location.Y > -64.0) ? OI_Smb1VineGrowSpeed() : 0.0;
         tempLocation.Height = 28;
         tempLocation.Width = 30;
@@ -2880,7 +2880,7 @@ void NPCSpecial(int A)
             }
         }
     }
-    else if(npc.Type == NPCID_VILLAIN_S1 && npc.DefaultSpecial > 0)
+    else if(g_oiSmb1 && npc.Type == NPCID_VILLAIN_S1 && npc.DefaultSpecial > 0)
         OI_Smb1Bowser(A); // OverInteractive: el Bowser de SMB1 (RunBowser)
     else if(npc.Type == NPCID_VILLAIN_S1) // King Koopa
     {
@@ -3112,7 +3112,7 @@ void NPCSpecial(int A)
     }
     else if(npc.Type == NPCID_PLATFORM_S1)
     {
-        if(npc.Special > 0)
+        if(g_oiSmb1 && npc.Special > 0)
             OI_Smb1Platform(A); // OverInteractive: movimientos de SMB1
         else
             npc.Location.SpeedY = npc.Direction * 2;

@@ -1588,7 +1588,7 @@ void UpdateNPCs()
                         // OverInteractive: Bowser, el Hermano Martillo y el Podoboo de SMB1 no chocan con el escenario
                         // (el juego los mueve sin mirar el fondo: Bowser se mete en la pared del hacha al perseguir a
                         // Mario, el Hermano atraviesa los ladrillos al saltar).
-                        if(!(g_oiCliEpisode && OI_Smb1NoBlockCollision(A)))
+                        if(!(g_oiSmb1 && OI_Smb1NoBlockCollision(A)))
                             NPCBlockLogic(A, tempHit, tempHitBlock, tempSpeedA, numTempBlock, speedVar);
 
 

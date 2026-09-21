@@ -287,7 +287,8 @@ void GameLoop()
         UpdateEffects();
         g_microStats.start_task(MicroStats::Player);
         UpdatePlayer();
-        OI_Smb1Frame(); // OverInteractive: bandera, puente de Bowser, oleadas
+        if(g_oiSmb1)
+            OI_Smb1Frame(); // OverInteractive: bandera, puente de Bowser, oleadas
         speedRun_tick();
         // UpdateGraphics() now calls start_task internally
         if(LivingPlayers() || BattleMode)

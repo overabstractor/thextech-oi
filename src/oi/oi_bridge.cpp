@@ -61,6 +61,7 @@ static unsigned short oiPort()
 }
 
 bool g_oiCliEpisode = false;
+bool g_oiSmb1 = false;
 
 namespace
 {
@@ -528,7 +529,8 @@ void OI_Shutdown()
 
 void OI_AfterControls()
 {
-    OI_Smb1Controls();
+    if(g_oiSmb1)
+        OI_Smb1Controls();
 
     if(s_holdFrames <= 0)
         return;
