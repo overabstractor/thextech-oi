@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../floats.h"
@@ -122,9 +124,15 @@ double              s_climbX = 0.0;
 double              s_climbY = 0.0;
 double              s_vineGrown = 0.0;
 unsigned            s_frameCounter = 0;
+int                 s_spinyTimer = 0;           // FrenzyEnemyTimer: Spinys del Lakitu y oleadas
+bool                s_resetLakitu = false;      // resetLevelState -> lakituFrame
+bool                s_clearEnemyStates = false; // resetLevelState -> enemyState
+int                 s_smb1World = 1;            // mundo del nivel (1-8), del nombre del archivo
 
 void resetLevelState()
 {
+    s_resetLakitu = true;
+    s_clearEnemyStates = true;
     s_vineDone = false;
     s_seq = Seq::None;
     s_timer = 0;
@@ -474,6 +482,11 @@ int spawnProjectile(NPCID type, double x, double y, int dir, double sx, double s
     n.Location.Y = y;
     n.Location.SpeedX = sx;
     n.Location.SpeedY = sy;
+    // Identidad para su estado (enemyState): el origen, con un número de serie en la parte fraccionaria.
+    static unsigned serial = 0;
+    serial = (serial + 1) % 100000;
+    n.DefaultLocationX = x;
+    n.DefaultLocationY = y + serial * 1e-6;
     n.Direction = dir;
     n.Section = (uint8_t)section;
     n.Layer = LAYER_SPAWNED_NPCS;
@@ -648,6 +661,219 @@ bool bowserActive(int section)
     return false;
 }
 
+
+// -- Oleadas y cañones (BulletBillCheepCheep, InitFlyingCheepCheep, ProcessCannons) --------------------
+// Los enemigos de oleada llevan Special5 = kFrenzyTag y su movimiento sale de aquí, sin chocar con nada.
+// Special4 dice qué son: 1 Cheep volador, 2 Cheep nadador, 3 bala de oleada, 4 bala de cañón.
+constexpr int kFrenzyTag = 0x0F2E;
+enum FrenzyKind { FK_FLY = 1, FK_SWIM = 2, FK_BULLET = 3, FK_CANNON = 4 };
+
+uint8_t s_bitMFilter = 0;                          // BitMFilter (bolsa de alturas de la oleada)
+
+// "Ranura libre" del NES: los enemigos van en 5 ranuras y las oleadas solo usan las primeras. Aquí: cuántos
+// enemigos hay en pantalla (los que ocuparían ranura en el juego).
+bool occupiesSlot(const NPC_t& o)
+{
+    switch(o.Type)
+    {
+    case NPCID_FODDER_S1: case NPCID_UNDER_FODDER: case NPCID_GRN_TURTLE_S1: case NPCID_RED_TURTLE_S1:
+    case NPCID_GRN_SHELL_S1: case NPCID_RED_SHELL_S1: case NPCID_GRN_FLY_TURTLE_S1: case NPCID_RED_FLY_TURTLE_S1:
+    case NPCID_HEAVY_THROWER: case NPCID_SPIKY_THROWER: case NPCID_SPIKY_S3: case NPCID_SPIKY_BALL_S3:
+    case NPCID_SQUID_S1: case NPCID_RED_FISH_S1: case NPCID_GRN_FISH_S1: case NPCID_BULLET: case NPCID_LAVABUBBLE:
+    case NPCID_PLANT_S1:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// La pantalla del NES (256 px, con Mario a 112 del borde izquierdo al avanzar): la nuestra es más ancha y
+// contaría enemigos que en el juego aún no existen.
+void nesScreen(double& l, double& r)
+{
+    const Player_t& p = Player[1];
+    l = p.Location.X + p.Location.Width / 2.0 - 112.0 * 2.0;
+    r = l + 256.0 * 2.0;
+}
+
+int enemiesOnScreen(int section)
+{
+    double l, r;
+    nesScreen(l, r);
+    int c = 0;
+    for(int i = 1; i <= numNPCs; i++)
+    {
+        const NPC_t& o = NPC[i];
+        if(o.Killed == 0 && o.Active && o.Section == section && occupiesSlot(o) &&
+           o.Location.X + o.Location.Width > l && o.Location.X < r)
+            c++;
+    }
+    return c;
+}
+
+int countFrenzy(int kind, int section)
+{
+    int c = 0;
+    for(int i = 1; i <= numNPCs; i++)
+        if(NPC[i].Killed == 0 && NPC[i].Section == section && NPC[i].Special5 == kFrenzyTag && NPC[i].Special4 == kind)
+            c++;
+    return c;
+}
+
+int spawnFrenzy(NPCID type, int kind, double x, double y, int dir, int section)
+{
+    const int n = spawnProjectile(type, x, y, dir, 0.0, 0.0, section);
+    if(n)
+    {
+        NPC[n].Special5 = kFrenzyTag;
+        NPC[n].Special4 = kind;
+        NPC[n].Projectile = false;
+    }
+    return n;
+}
+
+double screenRightSmbx() { return -vScreen[1].X + vScreen[1].Width; }
+double screenLeftSmbx() { return -vScreen[1].X; }
+
+// Cheep volador (InitFlyingCheepCheep): sale por debajo de la pantalla a -5 px/frame, a un lado de Mario según
+// las tablas, y avanza SIEMPRE a la derecha (el original quería girarlo con "* -1" y puso "* 1").
+void spawnFlyingCheep(const Player_t& p, bool hard)
+{
+    static const int posLookup[4][4] = {
+        {0x80, 0x30, 0x40, 0x80}, {0x30, 0x50, 0x50, 0x70}, {0x20, 0x40, 0x80, 0xa0}, {0x70, 0x40, 0x90, 0x68},
+    };
+    static const int speedLookup[3][4] = {
+        {0x0e, 0x05, 0x06, 0x0e}, {0x1c, 0x20, 0x10, 0x0c}, {0x1e, 0x22, 0x18, 0x14},
+    };
+    static const int timerLookup[4] = {0x10, 0x60, 0x20, 0x48};
+    const int rng0 = iRand(256), rng1 = iRand(256), rng2 = iRand(256);
+    s_spinyTimer = timerLookup[rng1 & 3];
+    if(enemiesOnScreen(p.Section) >= (hard ? 4 : 3))
+        return;
+
+    const int pxs = (int)std::lround(std::fabs(p.Location.SpeedX) / 2.0 * 16.0);    // Player_X_Speed
+    int currng = rng0 & 3;
+    int idx = pxs == 0 ? 0 : (pxs <= 0x18 ? 1 : 2);
+    const int speed = speedLookup[idx][currng];
+    int dir = 1;
+    if(pxs == 0)
+    {
+        if((rng1 & 3) != 0)
+        {
+            currng = rng2 & 3;
+            idx = (rng2 >> 2) & 3;
+        }
+        if(currng >= 2)
+            dir = 2;
+    }
+    const double px = std::floor(p.Location.X / 2.0);
+    const double ex = (currng < 2) ? px - posLookup[idx][currng] : px + posLookup[idx][currng];
+    const int n = spawnFrenzy(NPCID_RED_FISH_S1, FK_FLY, ex * 2.0, smbxY(0xf8), dir == 1 ? 1 : -1, p.Section);
+    if(n)
+        NPC[n].Special3 = speed;
+}
+
+// Cheep nadador o bala de oleada (BulletBillCheepCheep): por la derecha, a una altura de la bolsa.
+void spawnRightExtent(const Player_t& p, bool water, int world)
+{
+    if(water && enemiesOnScreen(p.Section) >= 3)
+        return;
+    if(!water && countFrenzy(FK_BULLET, p.Section) > 0)
+        return;
+    static const int ypos[8] = {0x40, 0x30, 0x90, 0x50, 0x20, 0x60, 0xa0, 0x70};
+    if(s_bitMFilter == 0xff)
+        s_bitMFilter = 0;
+    int i = iRand(256);
+    for(;;)
+    {
+        i &= 7;
+        if(((1 << i) & s_bitMFilter) == 0)
+        {
+            s_bitMFilter |= (uint8_t)(1 << i);
+            break;
+        }
+        i++;
+    }
+    // Dentro del borde: el juego los pone justo fuera, pero en el motor un NPC que nace fuera de cámara se
+    // desactiva al instante.
+    const double x = screenRightSmbx() - 40.0;
+    const double y = smbxY(ypos[i]);
+    if(water)
+    {
+        bool red = iRand(256) >= 0xaa;
+        if(world != 2)
+            red = !red;
+        spawnFrenzy(red ? NPCID_RED_FISH_S1 : NPCID_GRN_FISH_S1, FK_SWIM, x, y, -1, p.Section);
+    }
+    else
+    {
+        spawnFrenzy(NPCID_BULLET, FK_BULLET, x, y, -1, p.Section);
+        PlaySound(SFX_Bullet);
+    }
+    s_spinyTimer = 0x20;
+}
+
+// ProcessCannons: con ranuras libres (de las 3 primeras), un cañón al azar de los 6 últimos baja su
+// temporizador o dispara (14). La bala sale hacia Mario a 0x18 (1,5 px NES), salvo con Mario a menos
+// de 0x28 px del cañón.
+struct CannonSlot { int npc = 0; double x = 0.0; int timer = 0; };
+CannonSlot s_cannons[6];
+
+void cannonsFrame(const Player_t& p, bool hard)
+{
+    // Los 6 cañones más a la derecha que ya asomaron (Cannon_PageLoc...): los de la pantalla del NES.
+    double l, r;
+    nesScreen(l, r);
+    int list[6];
+    int n = 0;
+    for(int i = 1; i <= numNPCs && n < 6; i++)
+    {
+        const NPC_t& o = NPC[i];
+        if(o.Type == NPCID_CANNONENEMY && o.DefaultSpecial > 0 && o.Section == p.Section &&
+           o.Location.X + o.Location.Width > l && o.Location.X < r)
+            list[n++] = i;
+    }
+    // Cada ranura recuerda su cañón (y su temporizador) por posición.
+    for(int k = 0; k < 6; k++)
+    {
+        if(k >= n)
+        {
+            s_cannons[k] = CannonSlot();
+            continue;
+        }
+        const double x = NPC[list[k]].Location.X;
+        if(s_cannons[k].x != x)
+            s_cannons[k] = CannonSlot{list[k], x, 0};
+        s_cannons[k].npc = list[k];
+    }
+
+    const int busy = enemiesOnScreen(p.Section);
+    for(int slot = 2; slot >= 0; slot--)
+    {
+        if(slot < busy)
+            continue;                       // ranura ocupada
+        const int rng = iRand(256) & (hard ? 7 : 15);
+        if(rng >= 6 || s_cannons[rng].npc == 0)
+            continue;
+        CannonSlot& c = s_cannons[rng];
+        if(c.timer != 0)
+        {
+            c.timer--;
+            continue;
+        }
+        c.timer = 14;
+        const NPC_t& cn = NPC[c.npc];
+        const int diff = (int)std::floor(cn.Location.X / 2.0) - (int)std::floor(p.Location.X / 2.0);
+        const int r00 = diff & 0xff;
+        const int carry = diff >= 0 ? 1 : 0;
+        if(((r00 + 0x28 + carry) & 0xff) < 0x50)
+            continue;                       // Mario pegado al cañón: la bala se borra
+        const int dir = diff < 0 ? 1 : -1;
+        spawnFrenzy(NPCID_BULLET, FK_CANNON, cn.Location.X, cn.Location.Y + 2.0, dir, p.Section);
+        PlaySound(SFX_Bullet);
+    }
+}
+
 void frenzy(const Player_t& p)
 {
     const int type = activeFrenzy(p);
@@ -661,26 +887,16 @@ void frenzy(const Player_t& p)
     const double screenLeft = -vScreen[1].X;
     const double screenRight = screenLeft + vScreen[1].Width;
 
-    if(type == BGO_FRENZY_CHEEP && UnderWater[p.Section] && s_frenzyTimer % 70 == 0 && countAlive(NPCID_RED_FISH_S1, p.Section) < 4)
+    // FrenzyEnemyTimer (s_spinyTimer, compartido con el Lakitu) marca el ritmo de las oleadas del juego.
+    if(type == BGO_FRENZY_CHEEP && s_spinyTimer == 0)
     {
-        // Bajo el agua (2-2, 7-2): entran nadando por la derecha.
-        const double y = 96.0 + 32.0 * iRand(8);
-        spawnProjectile(NPCID_RED_FISH_S1, screenRight - 40.0, y, -1, -1.5, 0.0, p.Section);
+        if(UnderWater[p.Section])
+            spawnRightExtent(p, true, s_smb1World);         // 2-2, 7-2: nadando
+        else
+            spawnFlyingCheep(p, s_frenzyHard);              // puentes: saltando
     }
-    else if(type == BGO_FRENZY_CHEEP && !UnderWater[p.Section] && s_frenzyTimer % 45 == 0 && countAlive(NPCID_RED_FISH_S1, p.Section) < 5)
-    {
-        // Saltan desde abajo en arco, como en los puentes de SMB1.
-        const double x = screenLeft + 64.0 + iRand((int)std::fmax(64.0, vScreen[1].Width - 128.0));
-        const int dir = (iRand(2) == 0) ? -1 : 1;
-        spawnProjectile(NPCID_RED_FISH_S1, x, kLevelBottom + 16.0, dir, dir * (1.5 + dRand() * 1.5), -(9.0 + dRand() * 2.0), p.Section);
-    }
-    else if(type == BGO_FRENZY_BULLET && s_frenzyTimer % 100 == 0 && countAlive(NPCID_BULLET, p.Section) < 3)
-    {
-        const double y = 64.0 + 32.0 * iRand(9);
-        // Dentro del borde: un NPC que nace fuera de camara se desactiva al instante.
-        spawnProjectile(NPCID_BULLET, screenRight - 40.0, y, -1, -4.0, 0.0, p.Section);
-        PlaySound(SFX_Bullet);
-    }
+    else if(type == BGO_FRENZY_BULLET && s_spinyTimer == 0)
+        spawnRightExtent(p, false, s_smb1World);
     else if(type == BGO_FRENZY_FLAME && s_flameFrenzyTimer == 0 && !bowserActive(p.Section))
     {
         // InitBowserFlame sin Bowser: desde el borde derecho a una de las alturas de FlameYPosData;
@@ -800,7 +1016,7 @@ constexpr int    kShellRevive   = 16;                   // EnemyIntervalTimer al
 constexpr unsigned kIntervalFrames = 21;                // IntervalTimerControl 20..0
 
 bool isShellS1(NPCID t) { return t == NPCID_GRN_SHELL_S1 || t == NPCID_RED_SHELL_S1; }
-bool isKoopaS1(NPCID t) { return t == NPCID_GRN_TURTLE_S1 || t == NPCID_RED_TURTLE_S1 || t == NPCID_UNDER_FODDER; }
+bool isKoopaS1(NPCID t) { return t == NPCID_GRN_TURTLE_S1 || t == NPCID_RED_TURTLE_S1 || t == NPCID_UNDER_FODDER || t == NPCID_SPIKY_S3; }
 bool isWalkerS1(NPCID t) { return t == NPCID_FODDER_S1 || isKoopaS1(t); }
 
 // Estado del NES que el NPC del motor no guarda. Va por indice; la firma (posicion de origen) detecta
@@ -825,18 +1041,43 @@ struct EnemyState
     int     frameTimer = 0;     // EnemyFrameTimer: sin aterrizar mientras dure
     int     jumpTimer = 0;      // HammerBroJumpTimer
     int     throwTimer = 0;     // HammerThrowingTimer
+    int     moveFlag = 0;       // Planta Piraña: PiranhaPlant_MoveFlag / Blooper: BlooperMoveCounter
+    int     dir = 2;            // Enemy_MovingDir (1 derecha, 2 izquierda)
 };
-std::vector<EnemyState> s_enemies;
+// Por identidad del enemigo, NO por su hueco en NPC[]: al morir uno el motor mueve otro a su hueco, y con
+// el índice el que llegaba heredaba el estado del muerto (un Cheep volador volvía a saltar en el aire). La
+// identidad es la posición de origen (única en los del nivel; spawnProjectile la hace única en los nuestros).
+// Los que no la tienen (0, 0: los que invoca el chat) van por índice, con la firma como comprobación.
+std::unordered_map<uint64_t, EnemyState> s_enemyStates;
+
+uint64_t enemyKey(const NPC_t& n, int A)
+{
+    if(n.DefaultLocationX == 0.0 && n.DefaultLocationY == 0.0)
+        return 0xFFFF000000000000ull | uint64_t(A);
+    uint64_t x, y;
+    std::memcpy(&x, &n.DefaultLocationX, sizeof(x));
+    std::memcpy(&y, &n.DefaultLocationY, sizeof(y));
+    return (x * 0x9E3779B97F4A7C15ull) ^ (y + 0x632BE59BD9B4E019ull + (x << 6) + (x >> 2)) ^ (uint64_t(n.Section) << 56);
+}
 
 EnemyState& enemyState(int A)
 {
-    if(s_enemies.size() <= size_t(A))
-        s_enemies.resize(size_t(A) + 64);
-    EnemyState& st = s_enemies[size_t(A)];
     const NPC_t& n = NPC[A];
-    if(st.originX != n.DefaultLocationX || st.originY != n.DefaultLocationY || st.lastFrame + 1 != s_frameCounter)
+    if(s_clearEnemyStates)
     {
-        const bool sameNpc = st.originX == n.DefaultLocationX && st.originY == n.DefaultLocationY;
+        s_clearEnemyStates = false;
+        s_enemyStates.clear();
+    }
+    EnemyState& st = s_enemyStates[enemyKey(n, A)];
+    const bool sameNpc = st.originX == n.DefaultLocationX && st.originY == n.DefaultLocationY;
+    // Los de oleada llevan su vuelo entero aquí: un frame sin actualizar (fuera de cámara) no lo reinicia.
+    if(sameNpc && n.Special5 == kFrenzyTag)
+    {
+        st.lastFrame = s_frameCounter;
+        return st;
+    }
+    if(!sameNpc || st.lastFrame + 1 != s_frameCounter)
+    {
         const bool resting = sameNpc && st.resting;
         const int timer = st.timer;
         st = EnemyState();
@@ -1185,20 +1426,440 @@ void hammerBro(int A, EnemyState& st)
     n.SpecialX = (st.state & 8) ? -1.0 : 0.0;
 }
 
+// PlayerEnemyDiff del juego: diferencia de X en 16 bits, pero el valor absoluto sale solo del byte bajo
+// (a 256 px exactos de distancia da 0). Se replica tal cual.
+int nesPlayerDiffAbs(double enemyX)
+{
+    const int ex = (int)std::floor(enemyX / 2.0);
+    const int px = (int)std::floor(Player[1].Location.X / 2.0);
+    const int diff = ex - px;
+    const int r00 = diff & 0xff;
+    return diff < 0 ? ((-r00) & 0xff) : r00;
+}
+
+// Y NES del jugador como la usa el juego (arriba de su caja de 32 px).
+int nesPlayerY()
+{
+    const Player_t& p = Player[1];
+    return (int)std::floor(nesY(p.Location.Y + p.Location.Height)) - 32;
+}
+
+// Planta Piraña (MovePiranhaPlant): 24 px NES arriba y abajo, 1 px cada 2 frames, 64 frames quieta en
+// cada extremo. Abajo no sale si Mario está a menos de 0x21 px (de pie en la tubería o al lado).
+// En el motor la Y de origen es la de la planta fuera y su alto se recorta al esconderse.
+constexpr int kPiranhaRange = 0x18;
+constexpr int kPiranhaNear  = 0x21;
+
+void piranha(NPC_t& n, EnemyState& st)
+{
+    if(!st.sim)
+    {
+        st.sim = true;
+        st.y = kPiranhaRange;       // abajo, dentro de la tubería
+        st.v = 1;                   // PiranhaPlant_Y_Speed
+        st.moveFlag = 0;
+        st.frameTimer = 0;
+    }
+    if(st.frameTimer > 0)
+        st.frameTimer--;
+
+    if(st.frameTimer == 0)
+    {
+        bool hold = false;
+        if(st.moveFlag == 0)
+        {
+            if(st.v > 0 && nesPlayerDiffAbs(n.DefaultLocationX) < kPiranhaNear)
+                hold = true;
+            else
+            {
+                st.v = -st.v;
+                st.moveFlag = 1;
+            }
+        }
+        if(!hold && (s_frameCounter & 1))
+        {
+            st.y += st.v;
+            if(st.y == (st.v < 0 ? 0.0 : double(kPiranhaRange)))
+            {
+                st.moveFlag = 0;
+                st.frameTimer = 0x40;
+            }
+        }
+    }
+
+    const double full = n->THeight;
+    const double off = st.y * 2.0;
+    n.Location.X = n.DefaultLocationX;
+    n.Location.Y = n.DefaultLocationY + off;
+    n.Location.Height = std::max(0.0, full - off);
+    n.Location.SpeedX = 0.0;
+    n.Location.SpeedY = 0.0;
+    n.Immune = (n.Location.Height == 0.0) ? 100 : 0;
+    // Su propio ciclo (Special/Special2) sigue corriendo pero no mueve nada: la posición es la de aquí.
+    n.Special2 = 2;
+    n.Special = 0;
+}
+
+// Blooper (MoveBloober / ProcSwimmingB): brazadas de 32 px hacia arriba y hacia su lado (velocidad 0-1-2-1-0
+// cada 8 frames) y se hunde 1 px cada 2 frames hasta que Mario queda a su altura. De vez en cuando (1 de
+// cada 64 frames; 1 de cada 4 en modo difícil) elige lado: hacia Mario o hacia donde mira Mario.
+void blooper(int A, NPC_t& n, EnemyState& st)
+{
+    const bool hard = (n.DefaultSpecial >> 1) & 1;
+    const double oldX = n.Location.X - n.Location.SpeedX;
+    const double oldY = n.Location.Y - n.Location.SpeedY;
+    if(!st.sim)
+    {
+        st.sim = true;
+        st.x = oldX;
+        st.y = std::floor(nesY(oldY));
+        st.moveFlag = 0;        // BlooperMoveCounter
+        st.v = 0;               // Enemy_Y_MoveForce (= BlooperMoveSpeed)
+        st.timer = 0;           // EnemyIntervalTimer
+        st.dir = 2;
+    }
+    if(s_frameCounter % kIntervalFrames == 0 && st.timer > 0)
+        st.timer--;
+
+    const Player_t& p = Player[1];
+    bool carry = false;
+    if((iRand(256) & (hard ? 3 : 63)) == 0)
+    {
+        if(A & 1)
+        {
+            st.dir = (p.Direction > 0) ? 1 : 2;     // Player_MovingDir
+            carry = true;
+        }
+        else
+        {
+            const bool left = oldX < p.Location.X;  // PlayerEnemyDiff negativo
+            st.dir = left ? 1 : 2;
+            carry = !left;
+        }
+    }
+
+    int y = (int)st.y;
+    if((st.moveFlag & 2) == 0)
+    {
+        if((s_frameCounter & 7) == 0)
+        {
+            if((st.moveFlag & 1) == 0)
+            {
+                if(++st.v == 2)
+                    st.moveFlag++;
+            }
+            else if(--st.v == 0)
+            {
+                st.moveFlag++;
+                st.timer = 2;
+            }
+        }
+    }
+    else if(st.timer == 0 && nesPlayerY() <= ((y + 0x10 + (carry ? 1 : 0)) & 0xff))
+        st.moveFlag = 0;
+    else if((s_frameCounter & 1) == 0)
+        y += 1;
+
+    if(y - st.v >= 0x20)
+        y -= st.v;
+    st.y = y;
+    st.x += (st.dir == 1 ? st.v : -st.v) * 2.0;
+
+    n.Direction = (st.dir == 1) ? 1 : -1;
+    n.Location.X = st.x;
+    n.Location.Y = smbxY(st.y);
+    n.Location.SpeedX = n.Location.X - oldX;
+    n.Location.SpeedY = n.Location.Y - oldY;
+}
+
+// Lakitu (MoveLakitu / PlayerLakituDiff) y sus Spinys (LakituAndSpinyHandler). Toda la aritmética en bytes
+// como el juego: la velocidad (Enemy_X_Speed) se guarda con signo y al girar se va frenando.
+constexpr int kEggTag = 0x0E66;
+constexpr int kSpinyThrow = 0x80;           // FrenzyEnemyTimer
+
+int s_lakituReappear = 0;                   // LakituReappearTimer
+struct LakituSeen { bool seen = false; int section = 0; int special = 0; double originX = 0.0; };
+LakituSeen s_lakituSeen;
+
+bool frenzyEndedAfter(double originX)
+{
+    // Se acabó su zona: el último marcador de oleada que Mario dejó atrás es de fin y está a su derecha.
+    const Player_t& p = Player[1];
+    int type = 0;
+    double best = -1e18;
+    for(int i = 1; i <= numBackground; i++)
+    {
+        const int t = Background[i].Type;
+        if(t != BGO_FRENZY_CHEEP && t != BGO_FRENZY_BULLET && t != BGO_FRENZY_FLAME && t != BGO_FRENZY_STOP)
+            continue;
+        const double x = Background[i].Location.X;
+        if(x <= p.Location.X && x > best)
+        {
+            best = x;
+            type = t;
+        }
+    }
+    return type == BGO_FRENZY_STOP && best > originX;
+}
+
+int lakituSpeed(NPC_t& n, EnemyState& st, int p2, int p3, int p4, bool isLakitu)
+{
+    const int ex = (int)std::floor(n.Location.X / 2.0);
+    const int px = (int)std::floor(Player[1].Location.X / 2.0);
+    const int diff = ex - px;
+    int b1 = diff & 0xff;
+    int b2 = 0;
+    if(diff < 0)
+    {
+        b2 = 1;
+        b1 = (-b1) & 0xff;
+    }
+    if(b1 >= 0x3c)
+    {
+        b1 = 0x3c;
+        if(isLakitu && b2 != st.moveFlag)           // LakituMoveDirection
+        {
+            if(st.moveFlag != 0)
+            {
+                st.v = (st.v - 1) & 0xff;           // LakituMoveSpeed - 1
+                if(st.v != 0)
+                    return st.v;
+            }
+            st.moveFlag = b2;
+        }
+    }
+    b1 = ((b1 >> 2) & 0xf) + 1;
+
+    // Player_X_Speed (x16) y ScrollAmount: en el motor, la velocidad de Mario hacia la derecha.
+    const double sx = Player[1].Location.SpeedX;
+    const int pxs = (int)std::lround(std::fabs(sx) / 2.0 * 16.0);
+    const int scroll = sx > 0.5 ? (int)std::lround(sx / 2.0) : 0;
+    if(pxs == 0 || scroll == 0)
+        return (p2 - b1) & 0xff;
+    if(isLakitu && st.moveFlag == 0)
+        return (p2 - b1) & 0xff;
+    if(pxs <= 0x18 || scroll <= 1)
+        return (p3 - b1) & 0xff;
+    return (p4 - b1) & 0xff;
+}
+
+int countSpinies(int section)
+{
+    int c = 0;
+    for(int i = 1; i <= numNPCs; i++)
+    {
+        const NPC_t& o = NPC[i];
+        if(o.Killed != 0 || o.Section != section)
+            continue;
+        if(o.Type == NPCID_SPIKY_S3 || (o.Type == NPCID_SPIKY_BALL_S3 && o.Special5 == kEggTag))
+            c++;
+    }
+    return c;
+}
+
+void throwSpiny(const NPC_t& lak)
+{
+    // NES: 5 ranuras de enemigo (una es el Lakitu). El huevo sale 8 px NES por encima del Lakitu, sube a
+    // -3 px/frame y, por un bug del original, sin velocidad horizontal.
+    if(countSpinies(lak.Section) >= 4)
+        return;
+    const int h = spawnProjectile(NPCID_SPIKY_BALL_S3, lak.Location.X, lak.Location.Y - 16.0, lak.Direction, 0.0, 0.0, lak.Section);
+    if(!h)
+        return;
+    NPC[h].Special5 = kEggTag;
+    NPC[h].Projectile = false;
+    PlaySound(SFX_HeavyToss);
+}
+
+void lakitu(NPC_t& n, EnemyState& st)
+{
+    const double oldX = n.Location.X - n.Location.SpeedX;
+    const double oldY = n.Location.Y - n.Location.SpeedY;
+    if(!st.sim)
+    {
+        st.sim = true;
+        st.x = oldX;
+        st.y = oldY;
+        st.v = 0;
+        st.moveFlag = 0;
+        st.state = 0;
+    }
+    s_lakituSeen = LakituSeen{true, n.Section, n.DefaultSpecial, n.DefaultLocationX};
+    s_lakituReappear = 0;
+
+    if(st.state == 0 && frenzyEndedAfter(n.DefaultLocationX))
+        st.state = 1;                                   // EndFrenzy: se va
+
+    int speed;
+    if(st.state == 0)
+        speed = lakituSpeed(n, st, 21, 48, 64, true);
+    else
+    {
+        st.moveFlag = 0;
+        speed = 0x10;
+    }
+    if(st.moveFlag & 1)
+        n.Direction = 1;
+    else
+    {
+        speed = (-speed) & 0xff;
+        n.Direction = -1;
+    }
+    st.v = speed;
+    st.x += (int8_t)(uint8_t)speed / 16.0 * 2.0;
+
+    // Spinys: cada 0x80 frames, con Mario por debajo de 0x2c y el Lakitu en su estado normal.
+    if(st.state == 0 && s_spinyTimer == 0)
+    {
+        s_spinyTimer = kSpinyThrow;
+        if(nesPlayerY() >= 0x2c)
+            throwSpiny(n);
+    }
+
+    n.Location.X = st.x;
+    n.Location.Y = st.y;
+    n.Location.SpeedX = n.Location.X - oldX;
+    n.Location.SpeedY = 0.0;
+    // Su propio lanzamiento queda bloqueado (Special4 > 0 no deja empezar la animación que lanza).
+    n.Special3 = 0;
+    n.Special4 = 100;
+    n.Special5 = 0;
+    n.Frame = 0;
+}
+
+// Huevo de Spiny (estado 5): cae con 0x20/256 (tope 3) y al tocar suelo (y & 15 entre 8 y 12 con suelo
+// bajo x + 8, y + 24) se hace Spiny: hacia la derecha 1 de cada 8 veces, si no, hacia Mario.
+void spinyEgg(int A, NPC_t& n, EnemyState& st)
+{
+    const double oldY = n.Location.Y;
+    if(!st.sim)
+    {
+        st.sim = true;
+        st.y = (std::floor(nesY(n.Location.Y)) - 8.0) * 256.0;
+        st.v = -0x300;                                  // Y_Speed 0xfd
+    }
+    const int y = (int)std::floor(st.y / 256.0);
+    if(st.v > 0 && y >= 0x25 && ((y & 0xf) >= 8 && (y & 0xf) <= 12) &&
+       solidAt(n.Location.X + 16.0, smbxY(y + 24.0), n.Section))
+    {
+        const double cx = n.Location.X + n.Location.Width / 2.0;
+        n.Type = NPCID_SPIKY_S3;
+        n.Special5 = 0;
+        n.Location.Width = n->TWidth;
+        n.Location.Height = n->THeight;
+        n.Location.X = cx - n.Location.Width / 2.0;
+        n.Location.Y = smbxY(((y & 0xf0) | 8) + 24.0) - n.Location.Height;
+        n.Direction = ((s_frameCounter & 7) == 0) ? 1 : facePlayer(n);
+        n.Location.SpeedX = kEnemyWalk * n.Direction;
+        n.Location.SpeedY = 0.0;
+        n.Frame = 0;
+        st = EnemyState();
+        st.originX = n.DefaultLocationX;
+        st.originY = n.DefaultLocationY;
+        st.lastFrame = s_frameCounter;
+        NPCQueues::Unchecked.push_back(A);
+        treeNPCUpdate(A);
+        return;
+    }
+    imposeGravity(st.y, st.v, 0x20, 0, 3, false);       // MoveFallingPlatform
+    n.Location.SpeedX = 0.0;
+    n.Location.SpeedY = smbxY(std::floor(st.y / 256.0) + 8.0) - oldY;
+}
+
+} // namespace
+
+namespace
+{
+
+void frenzyMove(int A, NPC_t& n, EnemyState& st)
+{
+    const double oldX = n.Location.X - n.Location.SpeedX;
+    const double oldY = n.Location.Y - n.Location.SpeedY;
+    const int kind = n.Special4;
+    if(!st.sim)
+    {
+        st.sim = true;
+        st.x = std::floor(oldX / 2.0) * 256.0;                  // X NES * 256
+        st.y = std::floor(nesY(oldY)) * 256.0;
+        st.v = (kind == FK_FLY) ? -0x500 : 0;                   // Y_Speed 0xfb
+        st.timer = (int)std::floor(nesY(oldY));                 // CheepCheepOrigYPos
+        st.moveFlag = 0;                                        // CheepCheepMoveMFlag
+        st.state = (A % 3 == 2) ? 1 : 0;                        // solo la tercera ranura ondula
+    }
+
+    if(kind == FK_FLY)
+    {
+        static const int ysub[16] = {-8, -96, 112, -67, 0, 32, 32, 32, 0, 0, -75, 30, 41, 32, -16, 8};
+        st.x += n.Special3 * 16.0;                              // MoveEnemyHorizontally (siempre +)
+        imposeGravity(st.y, st.v, 0x0d, 0, 5, false);           // SetXMoveAmt(5, 0x0d)
+        const int mf = st.v & 0xff;
+        int d = (((int)std::floor(st.y / 256.0)) - ysub[mf >> 4]) & 0xff;
+        if(d >= 0x80)
+            d = (-d) & 0xff;
+        if(d < 8)
+            st.v = (st.v & ~0xff) | ((mf + 0x10) & 0xff);
+        if(st.v > 0 && st.y / 256.0 > 0xf8)
+        {
+            n.Killed = 9;                                       // cayó por debajo de la pantalla
+            NPCQueues::Killed.push_back(A);
+            return;
+        }
+    }
+    else if(kind == FK_SWIM)
+    {
+        st.x -= (n.Type == NPCID_GRN_FISH_S1) ? 0x40 : 0x80;   // 0,25 / 0,5 px NES por frame
+        if(st.state)
+        {
+            st.y += (st.moveFlag < 0x10) ? -0x20 : 0x20;
+            const int d = (int)std::floor(st.y / 256.0) - st.timer;
+            if(d > 0xe)
+                st.moveFlag = 0;
+            else if(d < -0xe)
+                st.moveFlag = 0x10;
+        }
+    }
+    else
+        st.x += (n.Direction < 0 ? -0x18 : 0x18) * 16.0;        // Bill Bala: 1,5 px NES por frame
+
+    // Sin redondear al píxel NES: a esta escala se ve más suave y la velocidad queda constante.
+    n.Location.X = st.x / 256.0 * 2.0;
+    n.Location.Y = smbxY(st.y / 256.0);
+    n.Location.SpeedX = n.Location.X - oldX;
+    n.Location.SpeedY = n.Location.Y - oldY;
+    if(kind != FK_FLY)
+        n.Direction = (n.Location.SpeedX < 0) ? -1 : 1;
+    n.CantHurt = 0;
+    n.TimeLeft = 100;
+    // Fuera de la pantalla por la izquierda (o por la derecha si va hacia allí) se borra, como en el juego.
+    const double l = screenLeftSmbx(), r = screenRightSmbx();
+    if(n.Location.X + n.Location.Width < l - 64.0 || n.Location.X > r + 128.0)
+    {
+        n.Killed = 9;
+        NPCQueues::Killed.push_back(A);
+    }
+}
 } // namespace
 
 void OI_Smb1HammerReleased(int A)
 {
-    if(A >= 1 && size_t(A) < s_enemies.size())
-        s_enemies[size_t(A)].state &= ~8;      // SetHSpd: Enemy_State & 0xf7
+    if(A < 1 || A > numNPCs)
+        return;
+    auto it = s_enemyStates.find(enemyKey(NPC[A], A));
+    if(it != s_enemyStates.end())
+        it->second.state &= ~8;                 // SetHSpd: Enemy_State & 0xf7
 }
 
 bool OI_Smb1NoBlockCollision(int A)
 {
     const NPC_t& n = NPC[A];
+    if(n.Type == NPCID_SPIKY_BALL_S3)
+        return n.Special5 == kEggTag;
+    if(n.Special5 == kFrenzyTag)
+        return true;
     if(n.DefaultSpecial <= 0)
         return false;
-    return n.Type == NPCID_VILLAIN_S1 || n.Type == NPCID_HEAVY_THROWER || n.Type == NPCID_LAVABUBBLE;
+    return n.Type == NPCID_VILLAIN_S1 || n.Type == NPCID_HEAVY_THROWER || n.Type == NPCID_LAVABUBBLE ||
+           n.Type == NPCID_SQUID_S1 || n.Type == NPCID_SPIKY_THROWER || n.Type == NPCID_PLANT_S1;
 }
 
 void OI_Smb1Platform(int A)
@@ -1464,6 +2125,34 @@ void OI_Smb1Troopa(int A)
     NPC_t& n = NPC[A];
     const NPCID t = n.Type;
 
+    // Oleadas y balas de cañón.
+    if(n.Special5 == kFrenzyTag && (t == NPCID_RED_FISH_S1 || t == NPCID_GRN_FISH_S1 || t == NPCID_BULLET))
+    {
+        EnemyState& st = enemyState(A);
+        if(n.Effect != NPCEFF_NORMAL || n.Killed != 0 || n.HoldingPlayer > 0)
+            return;
+        frenzyMove(A, n, st);
+        return;
+    }
+
+    // Planta Piraña, Blooper y Lakitu de los niveles (S1 del conversor).
+    if((t == NPCID_PLANT_S1 || t == NPCID_SQUID_S1 || t == NPCID_SPIKY_THROWER) && n.DefaultSpecial > 0)
+    {
+        EnemyState& st = enemyState(A);
+        if(n.HoldingPlayer > 0 || n.Effect != NPCEFF_NORMAL || n.Killed != 0 || n.Projectile)
+        {
+            st.sim = false;
+            return;
+        }
+        if(t == NPCID_PLANT_S1)
+            piranha(n, st);
+        else if(t == NPCID_SQUID_S1)
+            blooper(A, n, st);
+        else
+            lakitu(n, st);
+        return;
+    }
+
     // Podoboo y Hermano Martillo de los niveles (S1 del conversor); los del chat, con la IA del motor.
     if((t == NPCID_LAVABUBBLE || t == NPCID_HEAVY_THROWER) && n.DefaultSpecial > 0)
     {
@@ -1513,6 +2202,13 @@ void OI_Smb1Enemy(int A)
 {
     NPC_t& n = NPC[A];
     const NPCID t = n.Type;
+    if(t == NPCID_SPIKY_BALL_S3 && n.Special5 == kEggTag)
+    {
+        EnemyState& st = enemyState(A);
+        if(n.Effect == NPCEFF_NORMAL && n.Killed == 0)
+            spinyEgg(A, n, st);
+        return;
+    }
     const bool shell = isShellS1(t);
     if(!shell && !isWalkerS1(t))
         return;
@@ -1595,6 +2291,48 @@ void OI_Smb1Controls()
     c.Right = walk;
 }
 
+namespace
+{
+// Sin Lakitu vivo en su zona, vuelve a salir tras 7 vueltas del temporizador de Spinys (LakituReappearTimer),
+// por la derecha de la pantalla (PutAtRightExtent: 0x20 px NES más allá, a la altura 0x20).
+void lakituFrame(const Player_t& p)
+{
+    if(s_resetLakitu)
+    {
+        s_resetLakitu = false;
+        s_lakituSeen = LakituSeen();
+        s_lakituReappear = 0;
+        s_spinyTimer = 0;
+    }
+    if(s_spinyTimer > 0)
+        s_spinyTimer--;
+    if(!s_lakituSeen.seen || s_lakituSeen.section != p.Section)
+        return;
+    for(int i = 1; i <= numNPCs; i++)
+        if(NPC[i].Type == NPCID_SPIKY_THROWER && NPC[i].Killed == 0 && NPC[i].Section == p.Section && NPC[i].DefaultSpecial > 0)
+            return;
+    if(frenzyEndedAfter(s_lakituSeen.originX))
+    {
+        s_lakituSeen.seen = false;
+        return;
+    }
+    if(s_spinyTimer != 0)
+        return;
+    s_spinyTimer = kSpinyThrow;
+    if(++s_lakituReappear <= 6)
+        return;
+    s_lakituReappear = 0;
+    const double right = -vScreen[1].X + vScreen[1].Width;
+    const int n = spawnProjectile(NPCID_SPIKY_THROWER, right + 64.0, smbxY(0x20), -1, 0.0, 0.0, p.Section);
+    if(n)
+    {
+        NPC[n].DefaultSpecial = s_lakituSeen.special;
+        NPC[n].Special = s_lakituSeen.special;
+        NPC[n].DefaultLocationX = s_lakituSeen.originX;
+    }
+}
+} // namespace
+
 void OI_Smb1Frame()
 {
     if(GameMenu || LevelSelect || GameOutro || LevelEditor || numPlayers < 1)
@@ -1608,6 +2346,8 @@ void OI_Smb1Frame()
         s_file = FileName;
         s_section = p.Section;
         resetLevelState();
+        if(!FileName.empty() && FileName[0] >= '1' && FileName[0] <= '8')
+            s_smb1World = FileName[0] - '0';
         s_axeSeen = axeExists();
     }
 
@@ -1667,6 +2407,7 @@ void OI_Smb1Frame()
 
     if(s_flameFrenzyTimer > 0)
         s_flameFrenzyTimer--;
+    lakituFrame(p);
     updateBowserProjectiles();
 
     // Impostor derrotado a fuego (1-4..7-4): su forma real cae dada la vuelta.
@@ -1680,5 +2421,21 @@ void OI_Smb1Frame()
     }
 
     if(s_seq == Seq::None)
+    {
         frenzy(p);
+        cannonsFrame(p, s_frenzyHard);
+    }
+
+    // Cañones de los niveles: su disparo propio queda parado (dispara cannonsFrame). Los de oleada que el
+    // motor dejó inactivos (fuera de cámara) se borran, como hace el juego al salir de pantalla.
+    for(int i = 1; i <= numNPCs; i++)
+    {
+        if(NPC[i].Type == NPCID_CANNONENEMY && NPC[i].DefaultSpecial > 0)
+            NPC[i].Special = 0;
+        else if(NPC[i].Special5 == kFrenzyTag && !NPC[i].Active && NPC[i].Killed == 0)
+        {
+            NPC[i].Killed = 9;
+            NPCQueues::Killed.push_back(i);
+        }
+    }
 }

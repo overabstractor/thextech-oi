@@ -955,7 +955,8 @@ bool OpenLevel_NPC(void* userdata, LevelNPC& n)
         // Martillo y el Podoboo, la marca de "IA del juego" con su configuracion (mundo, modo dificil...).
         // Ver oi_smb1.h.
         if(npc.Type == NPCID_PLATFORM_S1 || npc.Type == NPCID_VILLAIN_S1 ||
-           npc.Type == NPCID_HEAVY_THROWER || npc.Type == NPCID_LAVABUBBLE)
+           npc.Type == NPCID_HEAVY_THROWER || npc.Type == NPCID_LAVABUBBLE || npc.Type == NPCID_PLANT_S1 ||
+           npc.Type == NPCID_SQUID_S1 || npc.Type == NPCID_SPIKY_THROWER || npc.Type == NPCID_CANNONENEMY)
         {
             npc.Special = (vbint_t)n.special_data;
             npc.DefaultSpecial = npc.Special;
