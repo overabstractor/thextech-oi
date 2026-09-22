@@ -433,9 +433,11 @@ int countOf(const OiEffect& eff, size_t index)
 //! Ejecuta un efecto ya sacado de la cola. Devuelve el status que se le responde a la app.
 const char* run(const OiEffect& eff)
 {
-    // Las consultas de depuracion no tocan el nivel: valen tambien durante un warp o la bandera.
+    // Las consultas de depuracion no tocan el nivel: valen tambien durante un warp o la bandera. La captura
+    // vale en cualquier sitio (menu o mapa del mundo: asi se puede comprobar que un episodio arranca) y las
+    // otras dos, en cuanto hay jugador.
     const bool readOnly = eff.name == "debug_player" || eff.name == "debug_npcs" || eff.name == "debug_screenshot";
-    if(readOnly ? (GameMenu || LevelSelect || numPlayers < 1) : !gameReady())
+    if(eff.name != "debug_screenshot" && (readOnly ? numPlayers < 1 : !gameReady()))
         return "try_again";
 
     // spawn_<nombre>: los nombres salen de la tabla generada del propio motor.
