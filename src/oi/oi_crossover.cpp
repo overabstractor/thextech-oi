@@ -24,11 +24,11 @@ namespace
 {
 
 // Vida (golpes que aguanta) de cada uno.
-constexpr int kHpGoku = 5, kHpSonic = 3, kHpNaruto = 3, kHpClone = 1;
+constexpr int kHpGoku = 5, kHpSonic = 3, kHpMadara = 4, kHpClone = 1;
 constexpr int kInvul = 40;                  // frames sin recibir daño tras un golpe
 
-bool isCharacter(NPCID t) { return t == NPC_GOKU || t == NPC_SONIC || t == NPC_NARUTO; }
-bool isProjectile(NPCID t) { return t == NPC_KI_BLAST || t == NPC_KAMEHAME || t == NPC_KUNAI; }
+bool isCharacter(NPCID t) { return t == NPC_GOKU || t == NPC_SONIC || t == NPC_MADARA; }
+bool isProjectile(NPCID t) { return t == NPC_KI_BLAST || t == NPC_KAMEHAME || t == NPC_KUNAI || t == NPC_KATON; }
 
 int nearestPlayer(const NPC_t& n)
 {
@@ -54,7 +54,8 @@ double centerY(const Location_t& l) { return l.Y + l.Height / 2.0; }
 
 bool grounded(const NPC_t& n)
 {
-    return n.Slope > 0 || fEqual(n.Location.SpeedY, double(Physics.NPCGravity));
+    // Tras el choque con el suelo el motor deja SpeedY a 0 (y en la IA ya lleva sumada la gravedad de un frame).
+    return n.Slope > 0 || std::fabs(n.Location.SpeedY) < 0.01 || fEqual(n.Location.SpeedY, double(Physics.NPCGravity));
 }
 
 int spawn(NPCID type, double cx, double cy, int dir, double sx, double sy, int section)
@@ -241,46 +242,88 @@ void sonic(NPC_t& n)
     }
 }
 
-// ── Naruto: avanza a saltos hacia Mario y le lanza kunais; al primer golpe hace dos clones de sombra. ──────
-void naruto(NPC_t& n)
+// ── Madara: camina a media distancia de Mario y le lanza kunais; cada pocos segundos hace los sellos de mano y
+// escupe la gran bola de fuego (Katon). Al primer golpe se desdobla en dos clones. ────────────────────────────
+enum MadaraState { M_WALK = 0, M_SIGNS = 1, M_FIRE = 2, M_THROW = 3 };
+
+void katon(const NPC_t& n)
+{
+    const int dir = n.Direction < 0 ? -1 : 1;
+    spawn(NPC_KATON, centerX(n.Location) + dir * 44.0, n.Location.Y + 14.0, dir, 4.0 * dir, 0.0, n.Section);
+    PlaySound(SFX_BigFireball);
+}
+
+void madara(NPC_t& n)
 {
     const int P = nearestPlayer(n);
     if(!P)
         return;
     const double dx = centerX(Player[P].Location) - centerX(n.Location);
-    n.Direction = dx < 0 ? -1 : 1;
+    if(n.Special != M_FIRE)
+        n.Direction = dx < 0 ? -1 : 1;
     if(n.SpecialY == 0.0)
     {
         n.SpecialY = 1.0;
-        n.Special = 0;
-        n.Special2 = 30;                    // hasta el próximo salto
-        n.Special4 = n.Special4;            // 1 = clon
-        n.Damage = 90 + iRand(40);          // hasta el próximo kunai (Damage no lo usa el motor aquí)
+        n.Special = M_WALK;
+        n.Damage = 70 + iRand(40);          // hasta el próximo kunai (Damage no lo usa el motor aquí)
+        n.SpecialX = 260 + iRand(120);      // hasta el próximo Katon (los clones no lo hacen)
     }
 
-    if(grounded(n))
+    switch(n.Special)
     {
+    case M_WALK:
+    case M_THROW:
+        // A unos 150 px de Mario: se acerca o se aleja; salta de vez en cuando.
+        if(std::fabs(dx) > 190.0)
+            n.Location.SpeedX = 1.4 * n.Direction;
+        else if(std::fabs(dx) < 110.0)
+            n.Location.SpeedX = -1.0 * n.Direction;
+        else
+            n.Location.SpeedX = 0.0;
+        if(grounded(n) && iRand(200) == 0)
+            n.Location.SpeedY = -7.0;
+        if(n.Special == M_THROW && --n.Special2 <= 0)
+            n.Special = M_WALK;
+        n.Damage -= 1.0;
+        if(n.Damage <= 0.0)
+        {
+            n.Damage = 90 + iRand(50);
+            spawn(NPC_KUNAI, centerX(n.Location) + n.Direction * 20.0, n.Location.Y + 22.0, n.Direction,
+                  7.0 * n.Direction, 0.0, n.Section);
+            n.Special = M_THROW;
+            n.Special2 = 15;
+            PlaySound(SFX_Throw);
+        }
+        if(n.Special4 != 1)
+        {
+            n.SpecialX -= 1.0;
+            if(n.SpecialX <= 0.0 && grounded(n))
+            {
+                n.Special = M_SIGNS;
+                n.Special2 = 50;
+                PlaySound(SFX_Transform);
+            }
+        }
+        break;
+
+    case M_SIGNS:
         n.Location.SpeedX = 0.0;
         if(--n.Special2 <= 0)
         {
-            n.Location.SpeedY = -6.0 - iRand(3);
-            n.Location.SpeedX = 2.0 * n.Direction;
-            n.Special2 = 25 + iRand(30);
+            n.Special = M_FIRE;
+            n.Special2 = 45;
+            katon(n);
         }
-    }
-    else if(std::fabs(n.Location.SpeedX) < 0.1)
-        n.Location.SpeedX = 2.0 * n.Direction;
+        break;
 
-    if(n.Special > 0)
-        n.Special--;                        // frames que dura la pose de lanzar
-    n.Damage -= 1.0;
-    if(n.Damage <= 0.0)
-    {
-        n.Damage = 90 + iRand(50);
-        spawn(NPC_KUNAI, centerX(n.Location) + n.Direction * 20.0, n.Location.Y + 26.0, n.Direction,
-              6.0 * n.Direction, 0.0, n.Section);
-        n.Special = 15;
-        PlaySound(SFX_Throw);
+    case M_FIRE:
+        n.Location.SpeedX = 0.0;
+        if(--n.Special2 <= 0)
+        {
+            n.Special = M_WALK;
+            n.SpecialX = 300 + iRand(150);
+        }
+        break;
     }
 }
 
@@ -288,10 +331,12 @@ void shadowClones(const NPC_t& n)
 {
     for(int side = -1; side <= 1; side += 2)
     {
-        const int c = spawn(NPC_NARUTO, centerX(n.Location) + side * 56.0, centerY(n.Location), -side, 0.0, -4.0, n.Section);
+        const int c = spawn(NPC_MADARA, centerX(n.Location) + side * 64.0, centerY(n.Location), -side, 0.0, -4.0, n.Section);
         if(c)
         {
             NPC[c].Special4 = 1;            // clon: un golpe y se deshace
+            NPC[c].SpecialX = 0.0;
+            NPC[c].SpecialY = 0.0;
             poof(NPC[c]);
         }
     }
@@ -331,21 +376,23 @@ void setTrait(int t, int w, int h, int wg, int hg, int frames, bool noGravity, b
 
 void OI_CrossoverSetup()
 {
-    // Goku: sprites del personaje de MUGEN (oi-crossover/mugen_goku.py), celdas de 48x56 con los pies abajo.
+    // Sprites de personajes de MUGEN (oi-crossover/mugen_chars.py): celdas con el eje de los pies centrado; el
+    // motor dibuja el gráfico con su borde de abajo en el de la caja (+ FrameOffsetY = píxeles bajo los pies), así
+    // quedan con los pies en el suelo; los ataques, centrados en su caja.
     setTrait(NPC_GOKU,     24, 40, 48, 56, 11, false, false);
-    setTrait(NPC_SONIC,    28, 40, 32, 48, 5, false, false);
-    setTrait(NPC_NARUTO,   28, 42, 32, 48, 3, false, false);
+    setTrait(NPC_SONIC,    24, 36, 34, 54, 10, false, false);
+    setTrait(NPC_MADARA,   24, 46, 62, 56, 11, false, false);
     setTrait(NPC_KI_BLAST, 24, 24, 32, 32, 0, true, true);
     setTrait(NPC_KAMEHAME, 56, 40, 72, 64, 3, true, true);
-    setTrait(NPC_KUNAI,    28, 10, 32, 16, 1, true, true);
-    // El motor dibuja el gráfico con su borde de abajo en el de la caja (+ FrameOffsetY): pies en el suelo en
-    // los personajes y centrado en los ataques.
+    setTrait(NPC_KUNAI,    24, 10, 32, 16, 1, true, true);
+    setTrait(NPC_KATON,    56, 40, 88, 64, 6, true, true);
     NPCTraits[NPC_GOKU].FrameOffsetY = 1;
-    NPCTraits[NPC_SONIC].FrameOffsetY = 6;
-    NPCTraits[NPC_NARUTO].FrameOffsetY = 4;
+    NPCTraits[NPC_SONIC].FrameOffsetY = 14;
+    NPCTraits[NPC_MADARA].FrameOffsetY = 3;
     NPCTraits[NPC_KI_BLAST].FrameOffsetY = 4;
     NPCTraits[NPC_KAMEHAME].FrameOffsetY = 12;
     NPCTraits[NPC_KUNAI].FrameOffsetY = 3;
+    NPCTraits[NPC_KATON].FrameOffsetY = 12;
 }
 
 bool OI_IsCrossover(int A)
@@ -374,7 +421,7 @@ void OI_CrossoverNpc(int A)
     else if(t == NPC_SONIC)
         sonic(n);
     else
-        naruto(n);
+        madara(n);
 }
 
 bool OI_CrossoverHit(int A, int B, int C)
@@ -411,15 +458,15 @@ bool OI_CrossoverHit(int A, int B, int C)
 
     n.Special3++;
     n.Special5 = kInvul;
-    const int hp = (t == NPC_GOKU) ? kHpGoku : (t == NPC_SONIC) ? kHpSonic : (n.Special4 == 1 ? kHpClone : kHpNaruto);
+    const int hp = (t == NPC_GOKU) ? kHpGoku : (t == NPC_SONIC) ? kHpSonic : (n.Special4 == 1 ? kHpClone : kHpMadara);
     if(n.Special3 >= hp)
     {
-        PlaySound(t == NPC_NARUTO && n.Special4 == 1 ? SFX_Transform : SFX_BossBeat);
+        PlaySound(t == NPC_MADARA && n.Special4 == 1 ? SFX_Transform : SFX_BossBeat);
         kill(A);
         return true;
     }
     PlaySound(B == 1 ? SFX_Stomp : SFX_SMBossHit);
-    if(t == NPC_NARUTO && n.Special4 != 1 && n.Special3 == 1)
+    if(t == NPC_MADARA && n.Special4 != 1 && n.Special3 == 1)
         shadowClones(n);
     return true;
 }
@@ -452,10 +499,33 @@ void OI_CrossoverFrames()
                 f = (tick / 16) % 2;
             break;
         case (int)NPC_SONIC:
-            f = n.Special != S_RUN ? 3 + (tick / 3) % 2 : (moving ? 1 + (tick / 5) % 2 : 0);
+            // 0 quieto, 1-4 correr, 5 en el aire, 6-7 bola cargando, 8-9 bola rodando (mugen_chars.py)
+            if(n.Special == S_CURL)
+                f = 6 + (tick / 3) % 2;
+            else if(n.Special == S_DASH)
+                f = 8 + (tick / 2) % 2;
+            else if(!grounded(n))
+                f = 5;
+            else
+                f = moving ? 1 + (tick / 4) % 4 : 0;
             break;
-        case (int)NPC_NARUTO:
-            f = n.Special > 0 ? 2 : (grounded(n) ? 0 : 1);
+        case (int)NPC_MADARA:
+            // 0-1 quieto, 2-5 andar, 6 en el aire, 7-8 sellos, 9 kunai, 10 fuego (mugen_chars.py)
+            if(n.Special == M_SIGNS)
+                f = 7 + (tick / 8) % 2;
+            else if(n.Special == M_FIRE)
+                f = 10;
+            else if(n.Special == M_THROW)
+                f = 9;
+            else if(!grounded(n))
+                f = 6;
+            else if(moving)
+                f = 2 + (tick / 6) % 4;
+            else
+                f = (tick / 16) % 2;
+            break;
+        case (int)NPC_KATON:
+            f = (tick / 4) % 6;
             break;
         case (int)NPC_KI_BLAST:
             n.Frame = (tick / 4) % 2;
@@ -479,7 +549,7 @@ NPCID OI_CrossoverByName(const char* name)
         return NPC_GOKU;
     if(!std::strcmp(name, "sonic"))
         return NPC_SONIC;
-    if(!std::strcmp(name, "naruto"))
-        return NPC_NARUTO;
+    if(!std::strcmp(name, "madara"))
+        return NPC_MADARA;
     return NPCID_NULL;
 }

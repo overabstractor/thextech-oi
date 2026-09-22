@@ -766,7 +766,7 @@ void NPCMovementLogic(int A, float& speedVar)
     // OverInteractive: los enemigos de SMB1 con las cifras del juego original
     if(g_oiSmb1)
         OI_Smb1Enemy(A);
-    // OverInteractive: personajes invitados (Goku, Sonic, Naruto), en cualquier mundo
+    // OverInteractive: personajes invitados (Goku, Sonic, Madara), en cualquier mundo
     OI_CrossoverNpc(A);
 
     // Actual Movement (SpeedX / SpeedY application code)
