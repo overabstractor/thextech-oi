@@ -111,15 +111,9 @@ enum GokuState { G_WALK = 0, G_CHARGE = 1, G_FIRE = 2 };
 
 void fireKamehameha(const NPC_t& g)
 {
+    // La bola grande de energía (la del especial del Goku de MUGEN) sale de sus manos y cruza la pantalla.
     const int dir = g.Direction < 0 ? -1 : 1;
-    const double y = g.Location.Y + 26.0;
-    const double x0 = dir > 0 ? g.Location.X + g.Location.Width + 16.0 : g.Location.X - 16.0;
-    for(int i = 0; i < 14; i++)
-    {
-        const int s = spawn(NPC_KAMEHAME, x0 + dir * 32.0 * i, y, dir, 0.0, 0.0, g.Section);
-        if(s)
-            NPC[s].Special2 = 55 + i;       // vive un poco más la punta
-    }
+    spawn(NPC_KAMEHAME, centerX(g.Location) + dir * 40.0, g.Location.Y + 20.0, dir, 6.0 * dir, 0.0, g.Section);
     PlaySound(SFX_BigFireball);
 }
 
@@ -307,17 +301,6 @@ void shadowClones(const NPC_t& n)
 // ── Proyectiles: rectos, atraviesan el escenario y duran un rato. ────────────────────────────────────────
 void projectile(int A, NPC_t& n)
 {
-    if(n.Type == NPC_KAMEHAME)
-    {
-        n.Location.SpeedX = 0.0;
-        n.Location.SpeedY = 0.0;
-        if(--n.Special2 <= 0)
-        {
-            n.Killed = 9;
-            NPCQueues::Killed.push_back(A);
-        }
-        return;
-    }
     n.Location.SpeedX = n.SpecialX;
     n.Location.SpeedY = n.SpecialY;
     n.TimeLeft = std::max<int>(n.TimeLeft, 10);
@@ -348,20 +331,21 @@ void setTrait(int t, int w, int h, int wg, int hg, int frames, bool noGravity, b
 
 void OI_CrossoverSetup()
 {
-    setTrait(NPC_GOKU,     28, 44, 32, 48, 4, false, false);
+    // Goku: sprites del personaje de MUGEN (oi-crossover/mugen_goku.py), celdas de 48x56 con los pies abajo.
+    setTrait(NPC_GOKU,     24, 40, 48, 56, 11, false, false);
     setTrait(NPC_SONIC,    28, 40, 32, 48, 5, false, false);
     setTrait(NPC_NARUTO,   28, 42, 32, 48, 3, false, false);
     setTrait(NPC_KI_BLAST, 24, 24, 32, 32, 0, true, true);
-    setTrait(NPC_KAMEHAME, 32, 20, 32, 32, 0, true, true);
+    setTrait(NPC_KAMEHAME, 56, 40, 72, 64, 3, true, true);
     setTrait(NPC_KUNAI,    28, 10, 32, 16, 1, true, true);
-    // Los personajes se dibujan con sus pies en el suelo (el gráfico es algo más alto que la caja).
-    NPCTraits[NPC_GOKU].FrameOffsetY = 2;
-    NPCTraits[NPC_SONIC].FrameOffsetY = 4;
-    NPCTraits[NPC_NARUTO].FrameOffsetY = 3;
-    NPCTraits[NPC_KI_BLAST].FrameOffsetX = -4;
-    NPCTraits[NPC_KI_BLAST].FrameOffsetY = -4;
-    NPCTraits[NPC_KAMEHAME].FrameOffsetY = -6;
-    NPCTraits[NPC_KUNAI].FrameOffsetY = -3;
+    // El motor dibuja el gráfico con su borde de abajo en el de la caja (+ FrameOffsetY): pies en el suelo en
+    // los personajes y centrado en los ataques.
+    NPCTraits[NPC_GOKU].FrameOffsetY = 1;
+    NPCTraits[NPC_SONIC].FrameOffsetY = 6;
+    NPCTraits[NPC_NARUTO].FrameOffsetY = 4;
+    NPCTraits[NPC_KI_BLAST].FrameOffsetY = 4;
+    NPCTraits[NPC_KAMEHAME].FrameOffsetY = 12;
+    NPCTraits[NPC_KUNAI].FrameOffsetY = 3;
 }
 
 bool OI_IsCrossover(int A)
@@ -455,7 +439,17 @@ void OI_CrossoverFrames()
         switch((int)t)
         {
         case (int)NPC_GOKU:
-            f = n.Special == G_CHARGE ? 2 : n.Special == G_FIRE ? 3 : (moving && (tick / 8) % 2) ? 1 : 0;
+            // 0-1 quieto, 2-5 andar, 6 en el aire, 7-8 cargar, 9-10 lanzar (orden de mugen_goku.py)
+            if(n.Special == G_CHARGE)
+                f = 7 + (tick / 6) % 2;
+            else if(n.Special == G_FIRE)
+                f = n.Special2 > 60 ? 9 : 10;
+            else if(!grounded(n))
+                f = 6;
+            else if(moving)
+                f = 2 + (tick / 5) % 4;
+            else
+                f = (tick / 16) % 2;
             break;
         case (int)NPC_SONIC:
             f = n.Special != S_RUN ? 3 + (tick / 3) % 2 : (moving ? 1 + (tick / 5) % 2 : 0);
@@ -464,9 +458,11 @@ void OI_CrossoverFrames()
             f = n.Special > 0 ? 2 : (grounded(n) ? 0 : 1);
             break;
         case (int)NPC_KI_BLAST:
-        case (int)NPC_KAMEHAME:
             n.Frame = (tick / 4) % 2;
             continue;
+        case (int)NPC_KAMEHAME:
+            f = (tick / 4) % 3;
+            break;
         default:
             break;
         }
