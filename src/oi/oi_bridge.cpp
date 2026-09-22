@@ -41,6 +41,13 @@
 #include "../player.h"
 #include "../npc_id.h"
 #include "../npc_traits.h"
+#include "../effect.h"
+#include "../eff_id.h"
+#include "../npc_effect.h"
+#include "../sound.h"
+#include "../main/trees.h"
+#include "../main/menu_main.h"
+#include "../config.h"
 #include "oi_npc_names.h"
 #include "oi_smb1.h"
 
@@ -255,8 +262,68 @@ bool gameReady()
     return true;
 }
 
-//! Coloca NPCs alrededor del jugador, alternando lados para que una tanda no se apile en un punto.
-int spawnNPC(NPCID type, int count)
+// Al aparecer, el enemigo se queda quieto y sin hacer daño un momento (efecto "en espera" del motor, marcado con
+// kGraceTag para que la colisión con el jugador lo ignore, ver OI_SpawnGrace): da tiempo a verlo y esquivarlo.
+constexpr int kSpawnGrace = 50;             // frames (~0,75 s)
+constexpr int kGraceTag = 0xA7;       // Effect3 es de 8 bits
+
+//! true si la caja pisa un bloque sólido (los semisólidos y los ocultos no cuentan).
+bool overlapsSolid(const Location_t& loc)
+{
+    for(int B : treeBlockQuery(loc, SORTMODE_NONE))
+    {
+        const Block_t& b = Block[B];
+        if(b.Hidden || b.Invis || BlockNoClipping[b.Type] || BlockOnlyHitspot1[b.Type] || BlockIsSizable[b.Type])
+            continue;
+        if(loc.X < b.Location.X + b.Location.Width && loc.X + loc.Width > b.Location.X &&
+           loc.Y < b.Location.Y + b.Location.Height && loc.Y + loc.Height > b.Location.Y)
+            return true;
+    }
+    return false;
+}
+
+//! Sitio para el i-ésimo NPC de una tanda: a media pantalla del jugador (no encima), alternando lados empezando
+//! por el que mira, dentro de la sección y fuera de las paredes. false si no hay ninguno libre.
+bool spawnSpot(const Player_t& p, double w, double h, int i, double& outX, double& outY)
+{
+    const SpeedlessLocation_t& sec = level[p.Section];
+    const double cx = p.Location.X + p.Location.Width / 2.0;
+    const double feet = p.Location.Y + p.Location.Height;
+    const int first = ((i % 2) == 0) ? (p.Direction < 0 ? -1 : 1) : (p.Direction < 0 ? 1 : -1);
+
+    for(int extra = 0; extra < 4; ++extra)
+    {
+        const double dist = 208.0 + 64.0 * (i / 2) + 48.0 * extra;
+        for(int k = 0; k < 2; ++k)
+        {
+            const int side = k == 0 ? first : -first;
+            Location_t loc;
+            loc.Width = w;
+            loc.Height = h;
+            loc.X = cx + side * dist - w / 2.0;
+            if(loc.X < sec.X || loc.X + w > sec.Width)
+                continue;
+            // A la altura de sus pies o un poco más arriba si ahí hay suelo (cae hasta el suelo al activarse).
+            for(double up : {64.0, 32.0, 96.0, 128.0})
+            {
+                loc.Y = feet - h - up;
+                if(loc.Y < sec.Y)
+                    continue;
+                if(!overlapsSolid(loc))
+                {
+                    outX = loc.X;
+                    outY = loc.Y;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+//! Coloca NPCs a media pantalla del jugador con una nube de humo y un instante de gracia antes de moverse.
+//! exact (spawn_npc, solo pruebas): a 96 px alternando lados y activos al instante, para medir la IA sin esperas.
+int spawnNPC(NPCID type, int count, bool exact = false)
 {
     if(type <= NPCID_NULL || (int)type > maxNPCType)
         return 0;
@@ -269,20 +336,33 @@ int spawnNPC(NPCID type, int count)
         if(numNPCs + 1 >= maxNPCs)
             break;
 
-        double side = ((i % 2) == 0) ? 1.0 : -1.0;
-        double dist = 96.0 + 48.0 * (i / 2);
+        const double w = NPCWidth(type), h = NPCHeight(type);
+        double x, y;
+        if(exact)
+        {
+            const double side = ((i % 2) == 0) ? 1.0 : -1.0;
+            x = p.Location.X + p.Location.Width / 2.0 - w / 2.0 + side * (96.0 + 48.0 * (i / 2));
+            y = p.Location.Y + p.Location.Height - h - 64.0;
+        }
+        else if(!spawnSpot(p, w, h, i, x, y))
+        {
+            // Sin hueco libre (pasillo estrecho, borde del nivel): delante del jugador, lo más lejos posible.
+            const double side = p.Direction < 0 ? -1.0 : 1.0;
+            x = p.Location.X + p.Location.Width / 2.0 - w / 2.0 + side * 160.0;
+            y = p.Location.Y + p.Location.Height - h - 64.0;
+        }
 
         numNPCs++;
         NPC_t& n = NPC[numNPCs];
         n = NPC_t();
         n.Type = type;
-        n.Location.Width  = NPCWidth(type);
-        n.Location.Height = NPCHeight(type);
-        n.Location.X = p.Location.X + p.Location.Width / 2.0 - n.Location.Width / 2.0 + side * dist;
-        n.Location.Y = p.Location.Y + p.Location.Height - n.Location.Height - 64.0;
+        n.Location.Width  = w;
+        n.Location.Height = h;
+        n.Location.X = x;
+        n.Location.Y = y;
         n.Location.SpeedX = 0.0;
         n.Location.SpeedY = 0.0;
-        n.Direction = (side > 0) ? -1 : 1;
+        n.Direction = (x + w / 2.0 > p.Location.X + p.Location.Width / 2.0) ? -1 : 1;   // mirando al jugador
         // Su origen es donde aparece: varias IA del motor lo usan (las plantas se destruyen si no están en su
         // X de origen, los peces y fantasmas se mueven alrededor de él).
         n.DefaultLocationX = n.Location.X;
@@ -297,12 +377,44 @@ int spawnNPC(NPCID type, int count)
         n.Active = true;
         n.JustActivated = 1;
         n.TimeLeft = 100;
+        if(!exact)
+        {
+            n.Effect = NPCEFF_WAITING;
+            n.Effect2 = kSpawnGrace;
+            n.Effect3 = kGraceTag;
+            NewEffect(EFFID_SMOKE_S3, n.Location);
+        }
 
         syncLayers_NPC(numNPCs);
         done++;
     }
 
+    if(done > 0 && !exact)
+        PlaySound(SFX_Smash);
+
     return done;
+}
+
+//! Suma (o resta) vidas en el contador que use la partida: el de "cientos" del sistema moderno del motor o las
+//! vidas clásicas. Quitar vidas clásicas no baja de 0 (la siguiente muerte es el game over).
+void addLives(int delta)
+{
+    if(g_config.modern_lives_system)
+    {
+        g_100s += delta;
+        if(g_100s > 9999)
+            g_100s = 9999;
+        if(g_100s < -9999)
+            g_100s = -9999;
+    }
+    else
+    {
+        Lives += (float)delta;
+        if(Lives > 99.f)
+            Lives = 99.f;
+        if(Lives < 0.f)
+            Lives = 0.f;
+    }
 }
 
 //! Cuantos enemigos pide el efecto (primer parametro), con tope de cordura.
@@ -336,6 +448,57 @@ const char* run(const OiEffect& eff)
         return spawnNPC(type, countOf(eff, 0)) > 0 ? "success" : "try_again";
     }
 
+    // add_lives / remove_lives <n>: vidas para el jugador (con el cartel de 1UP) o se las quita.
+    if(eff.name == "add_lives" || eff.name == "remove_lives")
+    {
+        const int count = countOf(eff, 0);
+        const bool add = eff.name == "add_lives";
+        addLives(add ? count : -count);
+        Location_t loc = Player[1].Location;
+        if(add)
+        {
+            NewEffect(EFFID_SCORE, loc);
+            Effect[numEffects].Frame = 9;                   // "1UP"
+            PlaySound(SFX_1up);
+        }
+        else
+        {
+            NewEffect(EFFID_SMOKE_S3, loc);
+            PlaySound(SFX_PlayerShrink);
+        }
+        return "success";
+    }
+
+    // restart_level: vuelve a empezar el nivel desde el principio (sin punto de control y sin perder vida).
+    if(eff.name == "restart_level")
+    {
+        std::string rel = FullFileName;
+        if(selWorld >= 1 && selWorld < (int)SelectWorld.size())
+        {
+            const std::string& wp = SelectWorld[selWorld].WorldPath;
+            if(rel.compare(0, wp.size(), wp) == 0)
+                rel = rel.substr(wp.size());
+        }
+        if(rel.empty())
+            return "failure";
+        Checkpoint.clear();
+        CheckpointsList.clear();
+        GoToLevel = rel;
+        GoToLevelNoGameThing = false;           // con la pantalla de "mundo / vidas" antes, como al morir
+        StartWarp = 0;
+        EndLevel = true;
+        return "success";
+    }
+
+    // kill_player: el jugador muere como si le tocara un enemigo (animación y música de muerte; pierde una vida).
+    if(eff.name == "kill_player")
+    {
+        for(int A = 1; A <= numPlayers; ++A)
+            if(!Player[A].Dead && Player[A].TimeToLive == 0)
+                PlayerDead(A);
+        return "success";
+    }
+
     // spawn_npc <id> [cantidad]: escotilla para probar los 292 tipos sin pasar por la tabla.
     if(eff.name == "spawn_npc")
     {
@@ -343,7 +506,7 @@ const char* run(const OiEffect& eff)
             return "failure";
 
         NPCID type = (NPCID)eff.params[0];
-        return spawnNPC(type, countOf(eff, 1)) > 0 ? "success" : "failure";
+        return spawnNPC(type, countOf(eff, 1), true) > 0 ? "success" : "failure";
     }
 
     // debug_state: cuantos NPC siguen vivos, por tipo. Es la unica forma honesta de saber si un
@@ -396,7 +559,8 @@ const char* run(const OiEffect& eff)
                       {"ground", p.Pinched.Bottom1 == 2 || p.StandingOnNPC != 0 || p.Slope != 0},
                       {"ctl", (p.Controls.Up ? 1 : 0) | (p.Controls.Down ? 2 : 0) | (p.Controls.Left ? 4 : 0) |
                               (p.Controls.Right ? 8 : 0) | (p.Controls.Jump ? 16 : 0) | (p.Controls.Run ? 32 : 0)},
-                      {"hold", s_holdFrames}, {"effect", (int)p.Effect} };
+                      {"hold", s_holdFrames}, {"effect", (int)p.Effect},
+                      {"ttl", p.TimeToLive}, {"lives", (int)Lives}, {"hundreds", g_100s}, {"modernLives", (bool)g_config.modern_lives_system} };
         sendRaw(j.dump());
         return "success";
     }
@@ -513,6 +677,11 @@ const char* run(const OiEffect& eff)
 }
 
 } // namespace
+
+bool OI_SpawnGrace(const NPC_t& n)
+{
+    return n.Effect == NPCEFF_WAITING && n.Effect3 == kGraceTag;
+}
 
 // ── API ─────────────────────────────────────────────────────────────────────
 

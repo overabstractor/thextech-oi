@@ -32,4 +32,8 @@ void OI_Poll();
 //! Justo despues de que el motor lea los mandos: aplica los botones forzados (debug_hold).
 void OI_AfterControls();
 
+struct NPC_t;
+//! El NPC acaba de aparecer por un efecto y aun esta en su instante de gracia: el jugador no choca con el.
+bool OI_SpawnGrace(const NPC_t& n);
+
 #endif // OI_BRIDGE_H
