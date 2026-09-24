@@ -22,7 +22,6 @@
 
 #include "../globals.h"
 #include "../npc.h"
-#include "../oi/oi_smb1.h"
 #include "../sound.h"
 #include "../collision.h"
 #include "../effect.h"
@@ -40,14 +39,9 @@
 #include "main/trees.h"
 
 #include <Logger/logger.h>
-#include "../oi/oi_crossover.h"
 
 void NPCHit(int A, int B, int C)
 {
-    // OverInteractive: los personajes invitados llevan su vida y sus reglas de daño
-    if(OI_CrossoverHit(A, B, C))
-        return;
-
     NPC_t tempNPC;
     Location_t tempLocation;
 
@@ -845,9 +839,6 @@ void NPCHit(int A, int B, int C)
                 PlaySoundSpatial(SFX_ShellHit, NPC[A].Location);
                 NPC[A].Damage += 1;
             }
-            // OverInteractive: SMB1 no da invulnerabilidad a Bowser entre bolas de fuego.
-            if(NPC[A].DefaultSpecial > 0)
-                NPC[A].Immune = 2;
         }
         else if(B == 10)
         {
@@ -857,8 +848,7 @@ void NPCHit(int A, int B, int C)
         }
         else if(B == 6)
             NPC[A].Killed = B;
-        // OverInteractive: el Bowser de SMB1 aguanta 5 bolas de fuego (BowserHitPoints).
-        if(NPC[A].Damage >= (NPC[A].DefaultSpecial > 0 ? 5 : 12))
+        if(NPC[A].Damage >= 12)
             NPC[A].Killed = B;
         // SMW Dry Bones
     }

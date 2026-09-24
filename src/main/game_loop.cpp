@@ -34,8 +34,6 @@
 #include "core/16m/sound_stream_16m.h"
 #endif
 
-#include "../oi/oi_bridge.h"
-#include "../oi/oi_smb1.h"
 #include "../globals.h"
 #include "../config.h"
 #include "../frame_timer.h"
@@ -68,9 +66,9 @@
 #include "main/level_medals.h"
 #include "script/luna/luna.h"
 #include "game_strings.h"
+#include "../oi/oi_bridge.h"
 
 #include "../pseudo_vb.h"
-#include "../oi/oi_crossover.h"
 
 PauseCode GamePaused = PauseCode::None;
 
@@ -152,10 +150,11 @@ void CheckActive();//in game_main.cpp
 
 void GameLoop()
 {
+    // OverInteractive: lo que manda la app se aplica aqui, una vez por frame.
+    OI_Poll();
+
     g_microStats.start_task(MicroStats::Script);
     lunaLoop();
-
-    OI_Poll();
 
     g_microStats.start_task(MicroStats::Controls);
 
@@ -163,10 +162,11 @@ void GameLoop()
     {
         QuickReconnectScreen::g_active = true;
 
-        if(g_config.allow_drop_add && !TestLevel && !g_oiCliEpisode)
+        if(g_config.allow_drop_add && !TestLevel)
             PauseGame(PauseCode::DropAdd, 0);
     }
 
+    // OverInteractive: despues de leer los mandos, por si el canal fuerza botones (solo en pruebas).
     OI_AfterControls();
 
     if(QuickReconnectScreen::g_active)
@@ -288,9 +288,6 @@ void GameLoop()
         UpdateEffects();
         g_microStats.start_task(MicroStats::Player);
         UpdatePlayer();
-        if(g_oiSmb1)
-            OI_Smb1Frame(); // OverInteractive: bandera, puente de Bowser, oleadas
-        OI_CrossoverFrames(); // OverInteractive: fotogramas de los personajes invitados
         speedRun_tick();
         // UpdateGraphics() now calls start_task internally
         if(LivingPlayers() || BattleMode)
@@ -611,9 +608,6 @@ int PauseGame(PauseCode code, int plr)
             else if(GamePaused == PauseCode::Message)
             {
                 if(MessageScreen_Logic(plr))
-                    break;
-                // OverInteractive: el mensaje del final del castillo de SMB1 se cierra solo
-                if(g_oiSmb1 && OI_Smb1MessageTimeout())
                     break;
             }
             else if(GamePaused == PauseCode::Prompt)

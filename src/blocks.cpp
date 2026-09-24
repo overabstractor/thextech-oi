@@ -44,7 +44,6 @@
 #include "graphics/gfx_update.h"
 #include "npc/npc_queues.h"
 #include "main/trees.h"
-#include "oi/oi_bridge.h"
 
 
 void BlockHit(int A, bool HitDown, int whatPlayer)
@@ -612,11 +611,6 @@ void BlockHit(int A, bool HitDown, int whatPlayer)
             // direction set to -1 if ancient boot block (104 case)
             if(is_ancient && C == NPCID_GRN_BOOT)
                 nn.Direction = -1;
-
-            // OverInteractive: en Super Mario Bros lo que sale de un bloque siempre arranca hacia la
-            // derecha (el motor lo manda al lado contrario al que mira el jugador).
-            if(g_oiSmb1)
-                nn.Direction = 1;
 
             if(NPCIsYoshi(C)) // if the npc is pet then set the color of the pod
             {

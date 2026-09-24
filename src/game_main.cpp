@@ -704,8 +704,9 @@ int GameMain(const CmdLineSetup_t &setup)
                 }
 
                 QuickReconnectScreen::g_active = true;
+                // OverInteractive: la app arranca el episodio por linea de comandos; sin pausa de "anadir
+                // jugador", el primer mando o tecla que se use se asigna solo.
                 g_oiCliEpisode = true;
-                g_oiSmb1 = Files::fileExists(SelectWorld[selWorld].WorldPath + "oi-smb1.txt");
 
                 StartEpisode();
             }

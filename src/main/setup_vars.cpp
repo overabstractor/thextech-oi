@@ -23,7 +23,6 @@
 #include "../custom.h"
 #include "npc_traits.h"
 #include "npc_id.h"
-#include "../oi/oi_crossover.h"
 
 void SetupVars()
 {
@@ -2832,7 +2831,6 @@ void SetupVars()
         else
             EffectDefaults.EffectFrames[A] = 1;
     }
-    OI_CrossoverSetup(); // OverInteractive: personajes invitados (NPC 293-298)
     SaveNPCDefaults();
     SavePlayerDefaults();
 }

@@ -16,9 +16,6 @@
 //! true si el episodio se arranco por linea de comandos (asi lo lanza la app): sin pausa de
 //! "anadir jugador"; el primer mando o tecla que se use se asigna solo.
 extern bool g_oiCliEpisode;
-//! El episodio lanzado es el Super Mario Bros clasico convertido (su carpeta trae oi-smb1.txt): solo entonces
-//! se aplican las reglas de SMB1 (oi_smb1). Los demas mundos juegan con las del motor.
-extern bool g_oiSmb1;
 
 //! Arranca el hilo de red. Idempotente.
 void OI_Init();

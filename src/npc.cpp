@@ -22,8 +22,6 @@
 
 #include "sdl_proxy/sdl_stdinc.h"
 #include "globals.h"
-#include "oi/oi_smb1.h"
-#include "oi/oi_bridge.h"
 #include "npc.h"
 #include "sound.h"
 #include "graphics.h"
@@ -706,9 +704,6 @@ void NPCSpecial(int A)
     if(npc.Type == NPCID_RED_VINE_TOP_S3 || npc.Type == NPCID_GRN_VINE_TOP_S3 || npc.Type == NPCID_GRN_VINE_TOP_S4) // Vine Maker
     {
         npc.Location.SpeedY = -2;
-        // OverInteractive: en SMB1 la liana crece a medio pixel NES por frame y para al salir por arriba.
-        if(g_oiSmb1)
-            npc.Location.SpeedY = (npc.Location.Y > -64.0) ? OI_Smb1VineGrowSpeed() : 0.0;
         tempLocation.Height = 28;
         tempLocation.Width = 30;
         tempLocation.Y = npc.Location.Y + npc.Location.Height / 2.0 - tempLocation.Height / 2.0;
@@ -2880,8 +2875,6 @@ void NPCSpecial(int A)
             }
         }
     }
-    else if(g_oiSmb1 && npc.Type == NPCID_VILLAIN_S1 && npc.DefaultSpecial > 0)
-        OI_Smb1Bowser(A); // OverInteractive: el Bowser de SMB1 (RunBowser)
     else if(npc.Type == NPCID_VILLAIN_S1) // King Koopa
     {
         C = 0;
@@ -3111,12 +3104,7 @@ void NPCSpecial(int A)
             npc.Location.SpeedY = 0;
     }
     else if(npc.Type == NPCID_PLATFORM_S1)
-    {
-        if(g_oiSmb1 && npc.Special > 0)
-            OI_Smb1Platform(A); // OverInteractive: movimientos de SMB1
-        else
-            npc.Location.SpeedY = npc.Direction * 2;
-    }
+        npc.Location.SpeedY = npc.Direction * 2;
 
     else if(npc.Type == NPCID_LAVA_MONSTER)
     {

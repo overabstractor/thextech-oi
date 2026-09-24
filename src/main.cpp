@@ -20,7 +20,6 @@
 
 #include <ctime>
 #include "sdl_proxy/sdl_head.h"
-#include "oi/oi_bridge.h"
 
 #include "../version.h"
 
@@ -30,6 +29,7 @@
 #include "rand.h"
 #include "sound.h"
 #include "main/game_info.h"
+#include "oi/oi_bridge.h"
 #include "main/speedrunner.h"
 #include "main/game_info.h"
 #include "main/asset_pack.h"
@@ -813,8 +813,6 @@ int main(int argc, char**argv)
 
     int ret = GameMain(setup);
 
-    OI_Shutdown();
-
 #ifdef ENABLE_XTECH_LUA
     if(!xtech_lua_quit())
         ret = 1;
@@ -824,6 +822,8 @@ int main(int argc, char**argv)
     if(g_isHBLauncher)
         SYSRelaunchTitle(0, NULL);
 #endif
+
+    OI_Shutdown();
 
     Controls::Quit();
     QuitMixerX();

@@ -26,9 +26,6 @@
 #include "collision.h"
 
 #include "main/trees.h"
-#include "oi/oi_smb1.h"
-#include "oi/oi_bridge.h"
-#include "oi/oi_crossover.h"
 
 static inline bool s_use_default_movement(int A)
 {
@@ -37,12 +34,6 @@ static inline bool s_use_default_movement(int A)
 
 void NPCMovementLogic(int A, float& speedVar)
 {
-    // OverInteractive: los enemigos de SMB1 andan más despacio que el umbral del motor (1,0 < 1,2); sin esto,
-    // al darse la vuelta (velocidad invertida por una pared, un borde u otro enemigo) el motor les devolvería
-    // la dirección vieja y se quedarían empujando la pared.
-    if(g_oiSmb1)
-        OI_Smb1EnemyFacing(A);
-
     // POSSIBLE SUBROUTINE: setSpeed
 
     // Default Movement Code
@@ -763,12 +754,6 @@ void NPCMovementLogic(int A, float& speedVar)
         }
     }
 
-    // OverInteractive: los enemigos de SMB1 con las cifras del juego original
-    if(g_oiSmb1)
-        OI_Smb1Enemy(A);
-    // OverInteractive: personajes invitados (Goku, Sonic, Madara), en cualquier mundo
-    OI_CrossoverNpc(A);
-
     // Actual Movement (SpeedX / SpeedY application code)
     if((!NPCIsAnExit(NPC[A]) || NPC[A].Type == NPCID_STAR_EXIT || NPC[A].Type == NPCID_STAR_COLLECT) &&
         NPC[A].Type != NPCID_FIRE_POWER_S3 && NPC[A].Type != NPCID_CONVEYOR)
@@ -819,10 +804,6 @@ void NPCMovementLogic(int A, float& speedVar)
 
     // Special NPCs code
     SpecialNPC(A);
-
-    // OverInteractive: los Paratroopas de SMB1 con el movimiento del juego original
-    if(g_oiSmb1)
-        OI_Smb1Troopa(A);
 
     // only the top half of the saw collides with blocks (gets restored after block collisions)
     if(NPC[A].Type == NPCID_SAW)

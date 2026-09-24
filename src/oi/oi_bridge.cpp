@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <cmath>
 #include <vector>
 
 #ifdef _WIN32
@@ -40,7 +41,10 @@
 #include "../layers.h"
 #include "../player.h"
 #include "../npc_id.h"
+#include "../npc.h"
 #include "../npc_traits.h"
+#include "../collision.h"
+#include "../npc/npc_queues.h"
 #include "../effect.h"
 #include "../eff_id.h"
 #include "../npc_effect.h"
@@ -49,7 +53,6 @@
 #include "../main/menu_main.h"
 #include "../config.h"
 #include "oi_npc_names.h"
-#include "oi_smb1.h"
 
 //! Puerto del canal. 58480 OoT, 58481 SM64, 58482 Smash 64, 58483 Majora, 58484 MK64.
 static constexpr unsigned short OI_DEFAULT_PORT = 58485;
@@ -68,7 +71,6 @@ static unsigned short oiPort()
 }
 
 bool g_oiCliEpisode = false;
-bool g_oiSmb1 = false;
 
 namespace
 {
@@ -262,6 +264,106 @@ bool gameReady()
     return true;
 }
 
+// Lo invocado por el chat se sigue hasta que muere o se va: la app lleva la cuenta de vivos y hasta que no le
+// avisamos no deja pasar los siguientes (los regalos se le quedan en cola). Se identifica por su origen, que es
+// unico (a la Y se le suma un numero de serie diminuto), porque el motor compacta los huecos de NPC[].
+struct Tracked
+{
+    int type;
+    double x, y;
+};
+std::vector<Tracked> s_tracked;
+int s_serial = 0;
+std::string s_lastFile;
+
+void sendHook(const char* type, int actorId)
+{
+    nlohmann::json j;
+    j["type"] = "hook";
+    if(actorId >= 0)
+        j["hook"] = { {"type", type}, {"actorId", actorId} };
+    else
+        j["hook"] = { {"type", type} };
+    sendRaw(j.dump());
+}
+
+//! Avisa de los invocados que ya no estan (muertos o retirados) y olvida el resto al cambiar de nivel.
+void trackSpawned()
+{
+    if(s_tracked.empty() && s_lastFile == FileName)
+        return;
+
+    // Cambio de nivel: lo invocado se queda atras; la app vacia su cuenta con OnTransitionEnd. La primera
+    // vuelta solo apunta en que nivel estamos (si no, borraria lo recien invocado).
+    if(s_lastFile != FileName)
+    {
+        const bool first = s_lastFile.empty();
+        s_lastFile = FileName;
+        if(!first && !s_tracked.empty())
+        {
+            s_tracked.clear();
+            sendHook("OnTransitionEnd", -1);
+        }
+        if(!first)
+            return;
+    }
+
+    for(size_t i = 0; i < s_tracked.size();)
+    {
+        const Tracked& t = s_tracked[i];
+        bool alive = false;
+        for(int A = 1; A <= numNPCs; A++)
+        {
+            const NPC_t& n = NPC[A];
+            if((int)n.Type == t.type && n.Killed == 0 &&
+               std::fabs(n.DefaultLocationX - t.x) < 0.001 && std::fabs(n.DefaultLocationY - t.y) < 1e-7)
+            {
+                alive = true;
+                break;
+            }
+        }
+        if(alive)
+            ++i;
+        else
+        {
+            sendHook("OnEnemyDefeat", t.type);
+            s_tracked.erase(s_tracked.begin() + (long)i);
+        }
+    }
+}
+
+// Estrella: invencible unos segundos. Mientras dura, los enemigos que toca mueren y a el no le pasa nada.
+// El motor no trae la estrella (SMBX 1.3 no la tiene), asi que se lleva aqui.
+int s_starFrames = 0;
+
+//! Un frame de estrella: al jugador no le entra dano y lo que toca cae.
+void starTick()
+{
+    if(s_starFrames <= 0)
+        return;
+    s_starFrames--;
+
+    for(int i = 1; i <= numPlayers; i++)
+    {
+        Player_t& p = Player[i];
+        if(p.Dead || p.TimeToLive > 0 || p.Effect != PLREFF_NORMAL)
+            continue;
+        p.Immune = 10;                          // sin dano (y parpadea, como en el juego)
+
+        for(int A = 1; A <= numNPCs; A++)
+        {
+            NPC_t& n = NPC[A];
+            if(!n.Active || n.Killed != 0 || n.Hidden || n.Generator || n.Effect != NPCEFF_NORMAL)
+                continue;
+            if(n->IsABonus || n->IsACoin || n->IsAVine || n->IsABlock || n.Inert)
+                continue;
+            if(!CheckCollision(p.Location, n.Location))
+                continue;
+            NPCHit(A, 3, 0);                    // como un disparo: muere y cuenta puntos
+        }
+    }
+}
+
 // Al aparecer, el enemigo se queda quieto y sin hacer daño un momento (efecto "en espera" del motor, marcado con
 // kGraceTag para que la colisión con el jugador lo ignore, ver OI_SpawnGrace): da tiempo a verlo y esquivarlo.
 constexpr int kSpawnGrace = 50;             // frames (~0,75 s)
@@ -293,7 +395,9 @@ bool spawnSpot(const Player_t& p, double w, double h, int i, double& outX, doubl
 
     for(int extra = 0; extra < 4; ++extra)
     {
-        const double dist = 208.0 + 64.0 * (i / 2) + 48.0 * extra;
+        // La distancia crece con cada uno: si un lado no vale (borde del nivel, pared), los siguientes no
+        // se amontonan en el mismo punto que el anterior.
+        const double dist = 208.0 + 40.0 * i + 48.0 * extra;
         for(int k = 0; k < 2; ++k)
         {
             const int side = k == 0 ? first : -first;
@@ -366,7 +470,9 @@ int spawnNPC(NPCID type, int count, bool exact = false)
         // Su origen es donde aparece: varias IA del motor lo usan (las plantas se destruyen si no están en su
         // X de origen, los peces y fantasmas se mueven alrededor de él).
         n.DefaultLocationX = n.Location.X;
-        n.DefaultLocationY = n.Location.Y;
+        // Numero de serie diminuto: hace unico su origen sin mover nada en pantalla (las IA que giran
+        // alrededor de el no notan una millonesima de pixel).
+        n.DefaultLocationY = n.Location.Y + (++s_serial % 1000) * 1e-6;
         n.DefaultDirection = n.Direction;
         // Un pez fuera del agua atravesaría el suelo: en tierra salta desde abajo hasta la altura de Mario
         // (el modo de pez saltarín del motor, como los Cheep Cheep de los puentes).
@@ -386,6 +492,8 @@ int spawnNPC(NPCID type, int count, bool exact = false)
         }
 
         syncLayers_NPC(numNPCs);
+        if(s_tracked.size() < 200)
+            s_tracked.push_back({(int)type, n.DefaultLocationX, n.DefaultLocationY});
         done++;
     }
 
@@ -511,6 +619,46 @@ const char* run(const OiEffect& eff)
         return spawnNPC(type, countOf(eff, 1), true) > 0 ? "success" : "failure";
     }
 
+    // player_power <1..7>: le da el power-up directamente, sin tener que cogerlo (1 pequeno, 2 grande,
+    // 3 fuego, 4 hoja, 5 tanooki, 6 martillo, 7 hielo).
+    if(eff.name == "player_power")
+    {
+        if(eff.params.empty() || eff.params[0] < 1 || eff.params[0] > 7)
+            return "failure";
+        const int want = eff.params[0];
+        for(int i = 1; i <= numPlayers; i++)
+        {
+            Player_t& p = Player[i];
+            if(p.Dead || p.TimeToLive > 0)
+                continue;
+            if(p.State == want)
+                continue;
+            const bool grow = want > p.State;
+            p.State = want;
+            SizeCheck(p);
+            p.Immune = 30;                      // como al coger uno: un respiro tras el cambio
+            p.Effect = PLREFF_WAITING;
+            p.Effect2 = 4;
+            PlaySound(grow ? SFX_PlayerGrow : SFX_PlayerShrink);
+            Location_t l = p.Location;
+            l.X = p.Location.X + p.Location.Width / 2.0 - 16.0;
+            l.Y = p.Location.Y + p.Location.Height / 2.0 - 16.0;
+            l.Width = l.Height = 32.0;
+            NewEffect(EFFID_SMOKE_S3, l);
+        }
+        return "success";
+    }
+
+    // player_star <segundos>: la estrella del original, invencible un rato.
+    if(eff.name == "player_star")
+    {
+        const int secs = eff.params.empty() ? 10 : eff.params[0];
+        const int frames = (secs < 1 ? 1 : (secs > 60 ? 60 : secs)) * 64;
+        s_starFrames = s_starFrames > frames ? s_starFrames : frames;   // se suma al que ya hubiera
+        PlaySound(SFX_PSwitch);
+        return "success";
+    }
+
     // debug_state: cuantos NPC siguen vivos, por tipo. Es la unica forma honesta de saber si un
     // spawn sobrevivio: que la app lo acepte no significa que el motor no lo haya descartado.
     if(eff.name == "debug_state")
@@ -544,7 +692,11 @@ const char* run(const OiEffect& eff)
 
         nlohmann::json j;
         j["type"] = "hook";
-        j["hook"] = { {"type", "OiDebugState"}, {"numNPCs", numNPCs}, {"alive", total}, {"byType", alive} };
+        nlohmann::json tracked = nlohmann::json::array();
+        for(const Tracked& t : s_tracked)
+            tracked.push_back({ {"type", t.type}, {"x", (int)t.x}, {"y", (int)t.y} });
+        j["hook"] = { {"type", "OiDebugState"}, {"numNPCs", numNPCs}, {"alive", total}, {"byType", alive},
+                      {"tracked", tracked} };
         sendRaw(j.dump());
         return "success";
     }
@@ -557,12 +709,12 @@ const char* run(const OiEffect& eff)
         j["type"] = "hook";
         j["hook"] = { {"type", "OiDebugPlayer"}, {"file", FileName}, {"section", p.Section},
                       {"x", (int)p.Location.X}, {"y", (int)p.Location.Y}, {"dead", p.Dead},
-                      {"levelMacro", (int)LevelMacro}, {"speedX", p.Location.SpeedX},
+                      {"levelMacro", (int)LevelMacro}, {"speedX", p.Location.SpeedX}, {"speedY", p.Location.SpeedY},
                       {"ground", p.Pinched.Bottom1 == 2 || p.StandingOnNPC != 0 || p.Slope != 0},
                       {"ctl", (p.Controls.Up ? 1 : 0) | (p.Controls.Down ? 2 : 0) | (p.Controls.Left ? 4 : 0) |
                               (p.Controls.Right ? 8 : 0) | (p.Controls.Jump ? 16 : 0) | (p.Controls.Run ? 32 : 0)},
                       {"hold", s_holdFrames}, {"effect", (int)p.Effect},
-                      {"ttl", p.TimeToLive}, {"lives", (int)Lives}, {"hundreds", g_100s}, {"modernLives", (bool)g_config.modern_lives_system} };
+                      {"ttl", p.TimeToLive}, {"state", p.State}, {"lives", (int)Lives}, {"hundreds", g_100s}, {"modernLives", (bool)g_config.modern_lives_system} };
         sendRaw(j.dump());
         return "success";
     }
@@ -668,6 +820,32 @@ const char* run(const OiEffect& eff)
         return "success";
     }
 
+    // debug_kill_spawned [cuantos]: mata a los invocados por el chat (no a los del nivel), como si los
+    // hubieran derrotado. Para comprobar que el juego avisa y la app libera el hueco.
+    if(eff.name == "debug_kill_spawned")
+    {
+        int left = eff.params.empty() ? 1 : eff.params[0];
+        int done = 0;
+        for(const Tracked& t : s_tracked)
+        {
+            if(left <= 0)
+                break;
+            for(int A = 1; A <= numNPCs; A++)
+            {
+                NPC_t& n = NPC[A];
+                if((int)n.Type != t.type || n.Killed != 0 ||
+                   std::fabs(n.DefaultLocationX - t.x) > 0.001 || std::fabs(n.DefaultLocationY - t.y) > 1e-7)
+                    continue;
+                n.Killed = 2;
+                NPCQueues::Killed.push_back(A);
+                left--;
+                done++;
+                break;
+            }
+        }
+        return done > 0 ? "success" : "failure";
+    }
+
     // debug_screenshot: dispara la captura propia del motor (queda en screenshots/).
     if(eff.name == "debug_screenshot")
     {
@@ -709,9 +887,6 @@ void OI_Shutdown()
 
 void OI_AfterControls()
 {
-    if(g_oiSmb1)
-        OI_Smb1Controls();
-
     if(s_holdFrames <= 0)
         return;
 
@@ -729,6 +904,17 @@ void OI_AfterControls()
 
 void OI_Poll()
 {
+    // Cada 10 frames basta: la app solo necesita saber que hay hueco para el siguiente regalo.
+    starTick();
+
+    static int tick = 0;
+    if(++tick >= 10)
+    {
+        tick = 0;
+        if(s_sock.load() != OI_BAD)
+            trackSpawned();
+    }
+
     for(;;)
     {
         OiEffect eff;

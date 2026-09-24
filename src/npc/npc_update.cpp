@@ -26,8 +26,6 @@
 #include "sdl_proxy/sdl_stdinc.h"
 
 #include "../globals.h"
-#include "../oi/oi_bridge.h"
-#include "../oi/oi_smb1.h"
 #include "../npc.h"
 #include "player.h"
 #include "../sound.h"
@@ -1585,11 +1583,7 @@ void UpdateNPCs()
                         int tempHitBlock = 0; // index of block NPC is walking on
                         float tempSpeedA = 0; // speed of ground the NPC is possibly standing on
 
-                        // OverInteractive: Bowser, el Hermano Martillo y el Podoboo de SMB1 no chocan con el escenario
-                        // (el juego los mueve sin mirar el fondo: Bowser se mete en la pared del hacha al perseguir a
-                        // Mario, el Hermano atraviesa los ladrillos al saltar).
-                        if(!(g_oiSmb1 && OI_Smb1NoBlockCollision(A)))
-                            NPCBlockLogic(A, tempHit, tempHitBlock, tempSpeedA, numTempBlock, speedVar);
+                        NPCBlockLogic(A, tempHit, tempHitBlock, tempSpeedA, numTempBlock, speedVar);
 
 
                         // End Block Collision

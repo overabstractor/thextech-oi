@@ -18,8 +18,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "../oi/oi_bridge.h"
 #include "globals.h"
+#include "../oi/oi_bridge.h"
 
 #include "player.h"
 #include "npc.h"
@@ -52,7 +52,7 @@ void PlayerNPCLogic(int A, bool& tempSpring, bool& tempShell, int& MessageNPC, c
 
     for(int B : treeNPCQuery(Player[A].Location, SORTMODE_ID))
     {
-        // OverInteractive: los enemigos recien invocados no chocan con el jugador durante su instante de gracia
+        // OverInteractive: lo recien invocado no choca con el jugador durante su instante de gracia.
         if(NPC[B].Active && NPC[B].Killed == 0 && NPC[B].Effect != NPCEFF_PET_TONGUE && NPC[B].Effect != NPCEFF_PET_INSIDE && !OI_SpawnGrace(NPC[B]))
         {
             // If Not (NPC(B).Type = 17 And NPC(B).CantHurt > 0) And Not (.Mount = 2 And NPC(B).Type = 56) And Not NPC(B).vehiclePlr = A And Not NPC(B).Type = 197 And Not NPC(B).Type = 237 Then

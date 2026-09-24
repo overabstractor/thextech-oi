@@ -778,10 +778,6 @@ set(THEXTECH_SRC
     src/main/world_file.cpp
     src/main/game_info.cpp
     src/main/game_loop.cpp
-    src/oi/oi_bridge.cpp
-    src/oi/oi_npc_names.cpp
-    src/oi/oi_smb1.cpp
-    src/oi/oi_crossover.cpp
     src/main/gameplay_timer.cpp
     src/main/player_frames.cpp
     src/main/setup_vars.cpp
@@ -844,6 +840,8 @@ set(THEXTECH_SRC
     src/custom.cpp
     src/graphics.cpp
     src/main.cpp
+    src/oi/oi_bridge.cpp
+    src/oi/oi_npc_names.cpp
     src/blocks.cpp
     src/gfx.cpp
     src/frm_main.cpp
